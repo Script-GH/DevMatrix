@@ -13,3 +13,4 @@ lerna-debug.log*
 packages/extension/node_modules
 package-lock.json
 packages/extension/package-lock.json
+.dmxrc
