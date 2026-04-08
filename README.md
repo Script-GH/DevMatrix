@@ -7,7 +7,7 @@
 - 🔍 **Dynamic Stack Detection**: Automatically parses `package.json`, `pyproject.toml`, and other config files to determine requirements.
 - 🛠️ **Deep System Probing**: Checks for binary versions, version managers (NVM, etc.), and environment variables.
 - 📊 **Health Score**: Generates a weighted health score (0-100) based on the severity of missing or misconfigured tools.
-- 🤖 **AI-Powered Advisor**: Integrates with Google Gemini to provide context-aware explanations and specific shell commands to fix environment issues.
+- 🤖 **AI-Powered Advisor**: Integrates with Groq to provide context-aware explanations and specific shell commands to fix environment issues.
 - 🖥️ **Premium Terminal UI**: Built with [Ink](https://github.com/vadimdemedes/ink) for a rich, interactive CLI experience.
 
 ## Project Structure
@@ -34,11 +34,11 @@ This is a monorepo managed with npm workspaces:
 
 ### Configuration (Optional)
 
-To enable AI-powered fixes, you'll need a Google Gemini API Key:
-1. Get an API key from [Google AI Studio](https://aistudio.google.com/).
+To enable AI-powered fixes, you'll need a Groq API Key:
+1. Get an API key from [Groq Console](https://console.groq.com/keys).
 2. Set it in your environment:
    ```powershell
-   $env:GEMINI_API_KEY="your_api_key_here"
+   $env:GROQ_API_KEY="your_api_key_here"
    ```
 
 ### Running the CLI
@@ -65,5 +65,5 @@ node packages/cli/dist/index.js scan
 1. **Scanner**: Detects what your project needs (e.g., Node version, Docker, specific env vars).
 2. **Prober**: Checks what you actually have installed.
 3. **Diff Engine**: Compares requirements vs. actual state and calculates a health score.
-4. **AI Advisor**: Sends failures to Gemini to get human-readable fixes.
+4. **AI Advisor**: Sends failures to Groq to get human-readable fixes.
 5. **Renderer**: Displays a beautiful dashboard in your terminal.

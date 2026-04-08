@@ -20,16 +20,20 @@ const CATEGORY_MULTIPLIERS: Record<Category, number> = {
 
 export function computeScore(checks: CheckResult[]): number {
   if (checks.length === 0) return -1;
-  
-  let deductions = 0;
+
+  let totalWeight = 0;
+  let failedWeight = 0;
   for (const check of checks) {
-    if (!check.passed) {
-      const base = SEVERITY_WEIGHTS[check.severity] ?? 0;
-      const mult = CATEGORY_MULTIPLIERS[check.category] ?? 1;
-      deductions += base * mult;
-    }
+    const base = SEVERITY_WEIGHTS[check.severity] ?? 0;
+    const mult = CATEGORY_MULTIPLIERS[check.category] ?? 1;
+    const weight = base * mult;
+    totalWeight += weight;
+    if (!check.passed) failedWeight += weight;
   }
-  return Math.max(0, Math.round(100 - deductions));
+
+  if (totalWeight <= 0) return 100;
+  const score = 100 - (failedWeight / totalWeight) * 100;
+  return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 export function evaluateEnvironment(
