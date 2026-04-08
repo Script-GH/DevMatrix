@@ -10,8 +10,8 @@ import { HealthReport } from '@devpulse/shared';
 const program = new Command();
 
 program
-  .name('devpulse')
-  .description('AI-Powered Environment Diagnostician')
+  .name('dmx')
+  .description('DevMatrix (DMX) - AI-Powered Environment Diagnostician')
   .version('1.0.0');
 
 program.command('scan')
@@ -68,6 +68,18 @@ program.command('scan')
         ui.update({ ...report });
         await ui.waitUntilExit();
     }
+  });
+
+program.command('fix')
+  .description('Automatically fix environment issues')
+  .action(() => {
+    console.log('dmx fix: Placeholder for automatic fixes.');
+  });
+
+program.command('advice')
+  .description('Get AI-driven technical advice for your setup')
+  .action(() => {
+    console.log('dmx advice: Placeholder for AI advice.');
   });
 
 program.parse();
