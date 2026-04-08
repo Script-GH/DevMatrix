@@ -16,7 +16,8 @@ program
 
 program.command('scan')
   .description('Scan the local environment and generate a health report')
-  .action(async () => {
+  .option('--json', 'Output report as JSON')
+  .action(async (options) => {
     const cwd = process.cwd();
     const report: HealthReport = {
         score: 0,
@@ -27,12 +28,15 @@ program.command('scan')
         summary: "Initializing DevPulse scan...",
     };
 
-    const ui = renderReport(report);
+    let ui: any;
+    if (!options.json) {
+        ui = renderReport(report);
+    }
 
     // 1. Detect Requirements dynamically from project files
     const reqs = await detectStack(cwd);
     report.detectedStacks = [...new Set(reqs.map(r => r.tool))];
-    ui.update({ ...report });
+    if (ui) ui.update({ ...report });
 
     // 2. Probe System based on installed binaries and configurations
     const probes = await probeSystem(cwd);
@@ -45,7 +49,7 @@ program.command('scan')
     const score = computeScore(checks);
     report.score = score;
     report.summary = score === 100 ? "Your environment is perfectly configured!" : "DevPulse generated the following diagnostics against your workspace.";
-    ui.update({ ...report });
+    if (ui) ui.update({ ...report });
 
     // 5. Fetch AI Context for Failures
     const aiFixes = await getAIFixes(checks);
@@ -57,9 +61,13 @@ program.command('scan')
             target.risk = fix.risk;
         }
     }
-    ui.update({ ...report });
-
-    await ui.waitUntilExit();
+    
+    if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+    } else {
+        ui.update({ ...report });
+        await ui.waitUntilExit();
+    }
   });
 
 program.parse();
