@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, render, Transform } from 'ink';
+import { Box, Text, render, useInput, useApp } from 'ink';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import { HealthReport, CheckResult } from '@devpulse/shared';
@@ -90,23 +90,60 @@ const AICard = ({ check }: { check: CheckResult }) => (
   </Box>
 );
 
-const Footer = () => (
-    <Box gap={2} marginTop={1}>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>devpulse fix --all</Text>
+const Footer = ({ activeAction }: { activeAction: string | null }) => (
+    <Box gap={2} marginTop={1} flexDirection="column">
+        <Box gap={2}>
+            <Box borderStyle="round" borderColor={activeAction === 'fix' ? 'green' : 'dim'} paddingX={1}>
+                <Text color={activeAction === 'fix' ? 'green' : 'white'}>[F] Fix All</Text>
+            </Box>
+            <Box borderStyle="round" borderColor={activeAction === 'advice' ? 'cyan' : 'dim'} paddingX={1}>
+                <Text color={activeAction === 'advice' ? 'cyan' : 'white'}>[A] Get Advice</Text>
+            </Box>
+            <Box borderStyle="round" borderColor="dim" paddingX={1}>
+                <Text>[Q] Quit</Text>
+            </Box>
         </Box>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>Export report</Text>
-        </Box>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>Reset demo</Text>
-        </Box>
+        {activeAction === 'fix' && (
+            <Box marginTop={1}>
+                <Text color="green">⚡ Running automatic fixes... (Simulated)</Text>
+            </Box>
+        )}
+        {activeAction === 'advice' && (
+            <Box marginTop={1}>
+                <Text color="cyan">🤖 Analyzing environment for deep advice... (Simulated)</Text>
+            </Box>
+        )}
     </Box>
 );
 
-const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => {
+const ReportDashboard = ({ 
+    initialReport, 
+    onFix, 
+    onAdvice 
+}: { 
+    initialReport: HealthReport,
+    onFix?: () => void,
+    onAdvice?: () => void
+}) => {
   const [report, setReport] = useState(initialReport);
   const [animatedScore, setAnimatedScore] = useState(0);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const { exit } = useApp();
+
+  useInput(async (input) => {
+    if (input === 'q') {
+        exit();
+    }
+    if (input === 'f') {
+        setActiveAction('fix');
+        await onFix?.();
+        // Keep status for a moment then could reset or update report
+    }
+    if (input === 'a') {
+        setActiveAction('advice');
+        await onAdvice?.();
+    }
+  });
 
   useEffect(() => {
     let current = animatedScore;
@@ -125,10 +162,9 @@ const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => 
     return () => clearInterval(interval);
   }, [report.score]);
 
-  // Listen for updates from the parent if needed (via ref or global bus) - 
-  // though here we'll assume the component might be re-rendered with new props
   useEffect(() => {
     setReport(initialReport);
+    setActiveAction(null); // Reset action on new report
   }, [initialReport]);
 
   const bigScore = figlet.textSync(animatedScore.toString(), { font: 'Standard' });
@@ -176,17 +212,32 @@ const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => 
         </Box>
       )}
 
-      <Footer />
+      <Footer activeAction={activeAction} />
     </Box>
   );
 };
 
-export function renderReport(report: HealthReport) {
-  const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} />);
+export function renderReport(
+    report: HealthReport, 
+    callbacks?: { onFix?: () => void, onAdvice?: () => void }
+) {
+  const { waitUntilExit, rerender } = render(
+    <ReportDashboard 
+        initialReport={report} 
+        onFix={callbacks?.onFix}
+        onAdvice={callbacks?.onAdvice}
+    />
+  );
   return {
     waitUntilExit,
     update: (newReport: HealthReport) => {
-        rerender(<ReportDashboard initialReport={newReport} />);
+        rerender(
+            <ReportDashboard 
+                initialReport={newReport} 
+                onFix={callbacks?.onFix}
+                onAdvice={callbacks?.onAdvice}
+            />
+        );
     }
   };
 }
