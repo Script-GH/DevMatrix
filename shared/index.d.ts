@@ -10,6 +10,7 @@ export interface CheckResult {
   required: string | null;
   found: string | null;
   passed: boolean;
+  statusLabel?: string;    // e.g. "outdated", "missing", "ok"
   explanation?: string;    // filled by AI
   fixCommand?: string;     // filled by AI
   risk?: RiskLevel;        // filled by AI

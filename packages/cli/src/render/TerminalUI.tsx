@@ -1,87 +1,192 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, render } from 'ink';
+import { Box, Text, render, Transform } from 'ink';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import { HealthReport, CheckResult } from '@devpulse/shared';
 
-const icon = (check: CheckResult) =>
-  check.passed ? '✓' : check.severity === 'critical' ? '✗' : '!';
+const STATUS_COLORS: Record<string, string> = {
+  ok: 'green',
+  missing: 'red',
+  outdated: 'red',
+  'update available': 'yellow',
+  mismatch: 'yellow',
+};
 
-const color = (check: CheckResult) =>
-  check.passed ? 'green' : check.severity === 'critical' ? 'red' : 'yellow';
+const StatusPill = ({ label }: { label: string }) => {
+  const color = STATUS_COLORS[label.toLowerCase()] || 'white';
+  return (
+    <Box paddingX={1}>
+      <Text color="black" backgroundColor={color}> {label.toLowerCase()} </Text>
+    </Box>
+  );
+};
 
-const ScoreBar = ({ score }: { score: number }) => {
+const HorizontalProgressBar = ({ score }: { score: number }) => {
+  const width = 46;
+  const filled = Math.round((score / 100) * width);
+  const bar = '█'.repeat(filled);
+  const background = '░'.repeat(width - filled);
+  
+  return (
+    <Box flexDirection="column" width={width}>
+      <Box justifyContent="space-between">
+        <Text dimColor>0</Text>
+        <Text color="yellow" bold>Needs attention</Text>
+        <Text dimColor>100</Text>
+      </Box>
+      <Box>
+         <Text color="yellow">{bar}</Text>
+         <Text dimColor>{background}</Text>
+      </Box>
+    </Box>
+  );
+};
+
+const CheckRow = ({ check }: { check: CheckResult }) => {
+  const icon = check.passed ? '✓' : check.severity === 'critical' ? 'X' : '!';
+  const iconColor = check.passed ? 'green' : check.severity === 'critical' ? 'red' : 'yellow';
+
+  return (
+    <Box gap={2} marginBottom={0}>
+      <Box width={2}>
+        <Text color={iconColor} bold>{icon}</Text>
+      </Box>
+      <Box width={20}>
+        <Text bold>{check.name}</Text>
+      </Box>
+      <Box flexGrow={1} minWidth={30}>
+        <Text dimColor>
+          {check.found ? `Found ${check.found}` : 'Not found'}
+          {check.required ? ` · Required ${check.required}` : ''}
+        </Text>
+      </Box>
+      <Box width={15} justifyContent="flex-end">
+        {check.statusLabel && <StatusPill label={check.statusLabel} />}
+      </Box>
+      <Box width={12} justifyContent="flex-end">
+        {!check.passed && <Text color="cyan" underline>Auto-fix ↗</Text>}
+      </Box>
+    </Box>
+  );
+};
+
+const AICard = ({ check }: { check: CheckResult }) => (
+  <Box 
+    flexDirection="column" 
+    borderStyle="single" 
+    borderColor="yellow" 
+    padding={1} 
+    marginY={1}
+  >
+    <Box marginBottom={1}>
+        <Text color="yellow" bold>GEMINI · FIX ADVISOR</Text>
+    </Box>
+    <Text>{check.explanation}</Text>
+    {check.fixCommand && (
+        <Box marginTop={1} paddingX={1} borderStyle="bold" borderColor="dim">
+            <Text color="green">$ {check.fixCommand}</Text>
+        </Box>
+    )}
+  </Box>
+);
+
+const Footer = () => (
+    <Box gap={2} marginTop={1}>
+        <Box borderStyle="round" borderColor="dim" paddingX={1}>
+            <Text>devpulse fix --all</Text>
+        </Box>
+        <Box borderStyle="round" borderColor="dim" paddingX={1}>
+            <Text>Export report</Text>
+        </Box>
+        <Box borderStyle="round" borderColor="dim" paddingX={1}>
+            <Text>Reset demo</Text>
+        </Box>
+    </Box>
+);
+
+const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => {
+  const [report, setReport] = useState(initialReport);
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
-    let current = 0;
+    let current = animatedScore;
+    const target = report.score;
     const interval = setInterval(() => {
-      current += Math.ceil((score - current) / 10);
-      if (current >= score) {
-        current = score;
-        clearInterval(interval);
-      }
-      setAnimatedScore(current);
-    }, 30);
+        if (current < target) {
+            current += 1;
+            setAnimatedScore(current);
+        } else if (current > target) {
+            current -= 1;
+            setAnimatedScore(current);
+        } else {
+            clearInterval(interval);
+        }
+    }, 20);
     return () => clearInterval(interval);
-  }, [score]);
+  }, [report.score]);
 
-  const filled = Math.round(animatedScore / 5);
-  const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
-  const c = animatedScore >= 80 ? 'green' : animatedScore >= 50 ? 'yellow' : 'red';
-  return <Text color={c}>{bar} {animatedScore}/100</Text>;
-};
+  // Listen for updates from the parent if needed (via ref or global bus) - 
+  // though here we'll assume the component might be re-rendered with new props
+  useEffect(() => {
+    setReport(initialReport);
+  }, [initialReport]);
 
-const Header = () => {
-    const title = figlet.textSync('DevPulse', { font: 'Slant' });
-    return (
-        <Box flexDirection="column" marginBottom={1}>
-            <Text>{gradient.pastel(title)}</Text>
-            <Text italic color="cyan">AI-Powered Environment Diagnostician</Text>
+  const bigScore = figlet.textSync(animatedScore.toString(), { font: 'Standard' });
+
+  return (
+    <Box flexDirection="column" padding={2}>
+      <Box gap={5} marginBottom={2} alignItems="center">
+        <Box flexDirection="column" width={25}>
+          <Text color="yellow" bold>{bigScore}</Text>
+          <Text dimColor bold>  Health score</Text>
         </Box>
-    );
+        <Box flexGrow={1} justifyContent="center" alignItems="center">
+           <HorizontalProgressBar score={animatedScore} />
+        </Box>
+      </Box>
+
+      <Box flexDirection="column" marginBottom={2}>
+        <Box marginBottom={1}>
+           <Text dimColor bold>RUNTIMES & TOOLING</Text>
+        </Box>
+        {report.checks.filter(c => ['runtime', 'package_manager', 'tool'].includes(c.category)).map(c => (
+           <CheckRow key={c.id} check={c} />
+        ))}
+      </Box>
+
+      {/* Environment Variables */}
+      <Box flexDirection="column" marginBottom={2}>
+        <Box marginBottom={1}>
+          <Text dimColor bold>ENVIRONMENT VARIABLES</Text>
+        </Box>
+        {report.checks.filter(c => c.category === 'env_var').map(c => (
+           <CheckRow key={c.id} check={c} />
+        ))}
+      </Box>
+
+      {/* AI Diagnosis */}
+      {report.checks.some(c => !c.passed && c.explanation) && (
+        <Box flexDirection="column" marginBottom={1}>
+            <Box marginBottom={1}>
+              <Text dimColor bold>AI DIAGNOSIS</Text>
+            </Box>
+            {report.checks.filter(c => !c.passed && c.explanation).map(c => (
+               <AICard key={c.id} check={c} />
+            ))}
+        </Box>
+      )}
+
+      <Footer />
+    </Box>
+  );
 };
 
 export function renderReport(report: HealthReport) {
-  const { waitUntilExit } = render(
-    <Box flexDirection="column" padding={1}>
-      <Header />
-      <Box marginY={1}>
-        <Text bold>Health Score: </Text>
-        <ScoreBar score={report.score} />
-      </Box>
-
-      {['runtime','package_manager','env_var','tool'].map(cat => {
-        // @ts-ignore
-        const checks = report.checks.filter(c => c.category === cat);
-        if (!checks.length) return null;
-        return (
-          <Box key={cat} flexDirection="column" marginBottom={1}>
-            <Text dimColor>{cat.replace('_',' ').toUpperCase()}</Text>
-            {checks.map(c => (
-              <Box key={c.id} gap={1}>
-                {/* @ts-ignore */}
-                <Text color={color(c)}>{icon(c)}</Text>
-                <Text>{c.name.padEnd(20)}</Text>
-                <Text dimColor>
-                  {c.found ? `found ${c.found}` : 'not found'}
-                  {c.required ? ` · required ${c.required}` : ''}
-                </Text>
-              </Box>
-            ))}
-          </Box>
-        );
-      })}
-
-      {report.checks.filter(c => !c.passed && c.explanation).map(c => (
-        <Box key={c.id} flexDirection="column" 
-             borderStyle="single" borderColor="yellow" padding={1} marginY={1}>
-          <Text color="yellow">AI · {c.name}</Text>
-          <Text>{c.explanation}</Text>
-          {c.fixCommand && <Text color="green">$ {c.fixCommand}</Text>}
-        </Box>
-      ))}
-    </Box>
-  );
-  return waitUntilExit();
+  const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} />);
+  return {
+    waitUntilExit,
+    update: (newReport: HealthReport) => {
+        rerender(<ReportDashboard initialReport={newReport} />);
+    }
+  };
 }
