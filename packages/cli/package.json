@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "bin": {
-    "devpulse": "./dist/index.js"
+    "dmx": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
