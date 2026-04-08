@@ -1,6 +1,6 @@
-# DevPulse
+# DevMatrix
 
-**DevPulse** is an AI-powered environment diagnostician designed to help developers ensure their systems are correctly configured for their projects. It scans your local workspace, detects the required tech stack, probes your system for installed tools/runtimes, and uses AI to provide helpful explanations and fix commands for any discrepancies found.
+**DevMatrix** is an AI-powered environment diagnostician designed to help developers ensure their systems are correctly configured for their projects. It scans your local workspace, detects the required tech stack, probes your system for installed tools/runtimes, and uses AI to provide helpful explanations and fix commands for any discrepancies found.
 
 ## Features
 
