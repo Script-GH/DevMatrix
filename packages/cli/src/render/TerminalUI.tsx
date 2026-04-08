@@ -226,7 +226,7 @@ export function renderReport(
     resolveFixRequest = resolve;
   });
 
-  const { waitUntilExit, rerender } = render(
+  const { waitUntilExit, rerender, unmount, clear } = render(
     <ReportDashboard
       initialReport={report}
       onFix={() => {
@@ -239,6 +239,8 @@ export function renderReport(
 
   return {
     waitUntilExit,
+    unmount,
+    clear,
     fixRequested: () => fixPromise,
     update: (newReport: HealthReport) => {
       rerender(

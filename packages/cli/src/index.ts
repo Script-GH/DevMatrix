@@ -131,6 +131,9 @@ program.command('scan')
 
     ui.update({ ...report });
     await ui.waitUntilExit();
+    
+    if (typeof ui.clear === 'function') ui.clear();
+    if (typeof ui.unmount === 'function') ui.unmount();
 
     restoreInteractiveStdin();
     await settleInputHandoff();
