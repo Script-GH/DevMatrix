@@ -89,44 +89,34 @@ const AICard = ({ check }: { check: CheckResult }) => (
     )}
   </Box>
 );
-const Footer = () => (
+const Footer = ({ activeAction }: { activeAction: string | null }) => (
     <Box gap={2} marginTop={1}>
-        <Box borderStyle="round" borderColor="yellow" paddingX={1}>
-            <Text>Press <Text bold color="yellow">f</Text> to Fix with Agent</Text>
+        <Box borderStyle="round" borderColor={activeAction === 'fix' ? 'green' : 'yellow'} paddingX={1}>
+            <Text>{activeAction === 'fix' ? 'Fixing with Agent...' : 'Press f to Fix with Agent'}</Text>
         </Box>
         <Box borderStyle="round" borderColor="dim" paddingX={1}>
             <Text>Export report</Text>
+        </Box>
+        <Box borderStyle="round" borderColor="dim" paddingX={1}>
+            <Text>Press <Text bold>q</Text> to quit</Text>
         </Box>
     </Box>
 );
 
 const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: HealthReport, onFixRequest: () => void }) => {
   const [report, setReport] = useState(initialReport);
-  const { exit } = useApp();
-
-  useInput((input, key) => {
-    if (input === 'f') {
-        onFixRequest();
-        exit();
-    }
-  });
-
   const [animatedScore, setAnimatedScore] = useState(0);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const { exit } = useApp();
 
-  useInput(async (input) => {
+  useInput((input) => {
     if (input === 'q') {
-        exit();
+      exit();
     }
     if (input === 'f') {
-        setActiveAction('fix');
-        await onFix?.();
-        // Keep status for a moment then could reset or update report
-    }
-    if (input === 'a') {
-        setActiveAction('advice');
-        await onAdvice?.();
+      setActiveAction('fix');
+      onFixRequest();
+      exit();
     }
   });
 

@@ -37,10 +37,7 @@ program.command('scan')
 
     let ui: any;
     if (!options.json) {
-        ui = renderReport(report, {
-            onFix: () => runFix(),
-            onAdvice: () => runAdvice()
-        });
+        ui = renderReport(report);
     }
 
     // 1. Parallel Discovery & Scanning
@@ -143,7 +140,7 @@ program.command('auth')
     
     const apiKey = await password({
       message: 'Enter your Gemini API Key:',
-      validate: (value) => {
+      validate: (value: string) => {
         if (!value) return 'API Key is required';
         if (value.length < 20) return 'API Key looks too short';
         return;
