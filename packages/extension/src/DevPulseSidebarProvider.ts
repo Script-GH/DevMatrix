@@ -47,8 +47,8 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
     const rootPath = workspaceFolders[0].uri.fsPath;
     this._view.webview.postMessage({ type: 'scanStarted' });
 
-    // Assuming the monorepo structure where cli is built in packages/cli/dist
-    const cliEntry = path.join(rootPath, 'packages', 'cli', 'dist', 'index.js');
+    // The CLI is located relative to the extension directory in the monorepo
+    const cliEntry = path.join(this._extensionUri.fsPath, '..', 'cli', 'dist', 'index.js');
     
     // Try both node paths (windows / linux)
     exec(`node "${cliEntry}" scan --json`, { cwd: rootPath }, (error, stdout, stderr) => {
