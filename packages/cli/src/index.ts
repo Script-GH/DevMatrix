@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import fs from 'fs/promises';
+import path from 'path';
 import { probeSystem } from './scanner/SystemProber.js';
 import { detectStack } from './scanner/StackDetector.js';
+import { parseEnv } from './scanner/EnvParser.js';
 import { computeScore, evaluateEnvironment } from './engine/DiffEngine.js';
 import { getAIFixes } from './ai/AIAdvisor.js';
 import { renderReport } from './render/TerminalUI.js';
@@ -36,32 +39,50 @@ program.command('scan')
         });
     }
 
-    // 1. Detect Requirements dynamically from project files
-    const reqs = await detectStack(cwd);
-    report.detectedStacks = [...new Set(reqs.map(r => r.tool))];
-    if (ui) ui.update({ ...report });
+    // 1. Parallel Discovery & Scanning
+    // Discovery subdirs (matching StackDetector logic)
+    const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+    const subdirs = entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+        .map(e => path.join(cwd, e.name));
 
-    // 2. Probe System based on installed binaries and configurations
-    const probes = await probeSystem(cwd);
+    // Run all scanners in parallel for maximum performance
+    const [reqs, probes, envParseResults] = await Promise.all([
+        detectStack(cwd),
+        probeSystem(cwd),
+        parseEnv(cwd, subdirs)
+    ]);
+
+    report.detectedStacks = [...new Set(reqs.map(r => r.tool))];
     
-    // 3. DiffEngine evaluate to synthesize differences into checks
-    const checks = evaluateEnvironment(reqs, probes);
+    // 2. DiffEngine evaluate
+    const envKeys = envParseResults.flatMap(r => r.keys);
+    const checks = evaluateEnvironment(reqs, probes, envKeys);
     report.checks = checks;
 
-    // 4. Compute Score
+    // 3. Compute Score
     const score = computeScore(checks);
     report.score = score;
-    report.summary = score === 100 ? "Your environment is perfectly configured!" : "DevPulse generated the following diagnostics against your workspace.";
+    if (score === -1) {
+        report.score = 0;
+        report.summary = "No project requirements detected. Is this the project root?";
+    } else {
+        report.summary = score === 100 ? "Your environment is perfectly configured!" : "DevPulse generated diagnostics against your workspace.";
+    }
+    
     if (ui) ui.update({ ...report });
 
-    // 5. Fetch AI Context for Failures
-    const aiFixes = await getAIFixes(checks);
-    for (const fix of aiFixes) {
-        const target = report.checks.find(c => c.id === fix.id);
-        if (target) {
-            target.explanation = fix.explanation;
-            target.fixCommand = fix.fixCommand;
-            target.risk = fix.risk;
+    // 4. Fetch AI Context for Failures
+    const failedChecks = checks.filter(c => !c.passed);
+    if (failedChecks.length > 0) {
+        const aiFixes = await getAIFixes(failedChecks);
+        for (const fix of aiFixes) {
+            const target = report.checks.find(c => c.id === fix.id);
+            if (target) {
+                target.explanation = fix.explanation;
+                target.fixCommand = fix.fixCommand;
+                target.risk = fix.risk;
+            }
         }
     }
     
@@ -73,28 +94,17 @@ program.command('scan')
     }
   });
 
-program.command('fix')
-  .description('Automatically fix environment issues')
-  .action(() => {
-    runFix();
-  });
+program.command('fix').action(runFix);
+program.command('advice').action(runAdvice);
 
-program.command('advice')
-  .description('Get AI-driven technical advice for your setup')
-  .action(() => {
-    runAdvice();
-  });
-
-async function runFix() {
-    console.log('\n⚡ dmx fix: Initiating automatic repair sequences...');
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    console.log('✅ Fixes applied successfully.');
+async function runFix() { 
+    console.log('\n⚡ dmx fix: Initiating automatic repair...');
+    await new Promise(r => setTimeout(r, 1000));
 }
 
 async function runAdvice() {
-    console.log('\n🤖 dmx advice: Consulting AI models for architectural recommendations...');
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    console.log('💡 AI Advice generated.');
+    console.log('\n🤖 dmx advice: Consulting AI...');
+    await new Promise(r => setTimeout(r, 1000));
 }
 
 program.parse();

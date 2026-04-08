@@ -10,5 +10,9 @@
   "workspaces": [
     "packages/*",
     "shared"
-  ]
+  ],
+  "scripts": {
+    "scan": "npm --prefix packages/cli run dev -- scan",
+    "dmx": "npm --prefix packages/cli run dev --"
+  }
 }
