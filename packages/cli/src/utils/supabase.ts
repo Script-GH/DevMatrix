@@ -92,11 +92,31 @@ export async function upsertDeveloper(
       last_active: new Date().toISOString(),
       synced_from: data.synced_from ?? null,
       user_id: data.user_id ?? null,
-    },
-    { onConflict: 'id' }
+    }
   );
 
   if (error) throw new Error(`upsertDeveloper: ${error.message}`);
+}
+
+/**
+ * Removes a developer registration from the project.
+ */
+export async function deleteDeveloper(
+  projectId: string,
+  devId: string
+): Promise<void> {
+  const sb = getClient();
+  const { error, count } = await sb
+    .from('developers')
+    .delete({ count: 'exact' })
+    .eq('id', devId)
+    .eq('project_id', projectId);
+
+  if (error) throw new Error(`deleteDeveloper: ${error.message}`);
+  
+  if (count === 0) {
+    throw new Error('No matching registration found in the database. (It may have been deleted already or blocked by RLS)');
+  }
 }
 
 /**
