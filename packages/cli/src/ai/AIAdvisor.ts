@@ -42,6 +42,53 @@ function stripCodeFences(text: string): string {
   return trimmed.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
 }
 
+function compressAdvice(text: string): string {
+  const clean = stripCodeFences(text).trim();
+  if (!clean) return clean;
+
+  const minBullets = 5;
+  const maxBullets = 10;
+
+  const normalizedLines = clean
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^#{1,6}\s+/.test(line)); // drop markdown headings
+
+  const bulletLike = normalizedLines
+    .filter((line) => /^[-*]\s+/.test(line))
+    .map((line) => line.replace(/^[-*]\s+/, '').trim())
+    .filter(Boolean);
+
+  const sentencePool = clean
+    .replace(/\n+/g, ' ')
+    .split(/[.!?]+\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  const source = bulletLike.length > 0 ? bulletLike : sentencePool;
+  const compact = source
+    .map((item) => item.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const selected = compact.slice(0, maxBullets);
+  if (selected.length < minBullets) {
+    for (const sentence of sentencePool) {
+      if (selected.length >= minBullets) break;
+      const normalized = sentence.replace(/\s+/g, ' ').trim();
+      if (!normalized) continue;
+      if (selected.includes(normalized)) continue;
+      selected.push(normalized);
+    }
+  }
+
+  if (selected.length === 0) {
+    return '- Check environment scan output and re-run with `dmx scan`.\n- Run `dmx auth` to verify API key setup.';
+  }
+
+  return selected.slice(0, maxBullets).map((line) => `- ${line}`).join('\n');
+}
+
 function parseJsonResponse<T>(text: string): T | null {
   try {
     return JSON.parse(stripCodeFences(text)) as T;
@@ -222,19 +269,17 @@ export async function getTechnicalAdvice(checks: CheckResult[]): Promise<string>
   if (!getGroqApiKey()) return "Authentication required. Please run 'dmx auth'.";
 
   const advicePrompt = `
-Analyze the following environment scan results and provide a high-level "Technical Situation Report".
-Don't just list the failures. Provide context on how these components interact and what the architectural impact is.
-Suggest best practices (e.g., using specific tools, workflow changes, or infrastructure settings).
+Give concise technical advice for this environment scan.
+Be strictly concise and action-oriented.
 
 Environment Scan Data:
 ${JSON.stringify(checks.map(c => ({ id: c.id, passed: c.passed, name: c.name, found: c.found, required: c.required })))}
 
-Return a concise, markdown-formatted report with 2-3 sections:
-1. Architectural Risk Assessment
-2. Strategic Recommendations
-3. Quick Wins (optional)
-
-Keep the tone professional and expert.
+Output format (strict):
+- Return ONLY markdown bullet points (no headings, no paragraphs).
+- Provide between 5 and 10 bullet points total.
+- Each bullet must be one short sentence.
+- Keep each bullet under 120 characters.
   `.trim();
 
   const text = await requestGroq([
@@ -243,6 +288,6 @@ Keep the tone professional and expert.
   ]);
 
   if (!text) return "AI advice service is temporarily unreachable. Please retry in a moment.";
-  const clean = stripCodeFences(text).trim();
+  const clean = compressAdvice(text);
   return clean || "No advice available at this time.";
 }
