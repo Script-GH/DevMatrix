@@ -211,7 +211,7 @@ export async function cmdAddDev(projectId: string): Promise<void> {
 // ─── dmx update list ─────────────────────────────────────────────────────────
 
 /**
- * Fetches the OFFICIAL project latest state from Firestore and reports
+ * Fetches the OFFICIAL project latest state from Supabase and reports
  * which packages you are out of sync with. Does NOT push anything.
  */
 export async function cmdUpdateList(): Promise<void> {
@@ -251,7 +251,7 @@ export async function cmdUpdateList(): Promise<void> {
       console.log(
         chalk.dim(`  Official state last updated: ${
           officialState.lastUpdated
-            ? new Date((officialState.lastUpdated as any).toDate()).toLocaleString()
+            ? new Date(officialState.lastUpdated as any).toLocaleString()
             : 'unknown'
         }`)
       );
@@ -293,7 +293,7 @@ export async function cmdUpdateOfficial(): Promise<void> {
     s.stop(`Applying ${chalk.bold('official')} project dependencies…`);
     await applyDepsToPackageJson(cwd, officialState.dependencies, 'Official Project');
 
-    // Update own Firestore doc to reflect the sync
+    // Update own Supabase doc to reflect the sync
     const newDeps = await scanLocalDeps(cwd);
     await upsertDeveloper(projectId, devId, {
       name: config.name ?? os.userInfo().username,
@@ -343,7 +343,7 @@ export async function cmdUpdateFrom(devName: string): Promise<void> {
       await syncEnvKeys(cwd, remoteEnvKeys, sourceLabel);
     }
 
-    // Update own Firestore doc
+    // Update own Supabase doc
     const newDeps = await scanLocalDeps(cwd);
     await upsertDeveloper(projectId, devId, {
       name: config.name ?? os.userInfo().username,
@@ -486,7 +486,7 @@ export async function cmdStatus(): Promise<void> {
 /**
  * Captures the current dependency snapshot, computes what changed since
  * the last recorded snapshot, and stores the diff + full map to the
- * developer's version timeline in Firestore.
+ * developer's version timeline in Supabase.
  *
  * This is a VERSION CHANGE TIMELINE — not a text/scan log.
  * After pushing, it also promotes the state as the new Official Project Latest.
@@ -503,7 +503,7 @@ export async function cmdLogsPush(): Promise<void> {
 
     const [currentDeps, env] = await Promise.all([scanLocalDeps(cwd), collectEnvSnapshot(cwd)]);
 
-    // Get last known state for this developer from Firestore to compute diff
+    // Get last known state for this developer from Supabase to compute diff
     const storedDev = await getDeveloper(projectId, devId).catch(() => null);
     const previousDeps: DependencyMap = storedDev?.data.dependencies ?? {};
 
