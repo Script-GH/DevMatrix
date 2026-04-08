@@ -34,6 +34,15 @@ export async function probeSystem(projectPath: string): Promise<ProbeResult[]> {
     probeBun(),
     probeGo(platform),
     probeRuby(),
+    probeJava(),
+    probeGradle(),
+    probeMaven(),
+    probeRust(),
+    probePhp(),
+    probeDotNet(),
+    probeElixir(),
+    probeCpp(),
+    probeFlutter(),
     probeEnvVars(projectPath),
   ];
 
@@ -279,6 +288,63 @@ const probePnpm = () => probeSimple('pnpm');
 const probeYarn = () => probeSimple('yarn');
 const probeBun = () => probeSimple('bun');
 const probeRuby = () => probeSimple('ruby');
+const probeCargo = () => probeSimple('cargo');
+const probeComposer = () => probeSimple('composer');
+const probeMix = () => probeSimple('mix');
+const probeCmake = () => probeSimple('cmake');
+const probeMake = () => probeSimple('make');
+const probeDart = () => probeSimple('dart');
+
+async function probeJava(): Promise<ProbeResult[]> {
+  const [result, binPath] = await Promise.all([
+    run('java', ['-version']),
+    resolvePath('java')
+  ]);
+  // Java usually outputs version to stderr
+  const output = result?.stderr || result?.stdout || '';
+  const match = output.match(/version "?([\d._]+)"?/);
+  return [{
+    tool: 'java',
+    found: match?.[1] ?? null,
+    raw: output || null,
+    path: binPath,
+    managedBy: binPath?.includes('sdkman') ? 'sdkman' : null,
+    reason: match ? undefined : 'java not found',
+  }];
+}
+
+async function probeGradle(): Promise<ProbeResult[]> {
+  const [result, binPath] = await Promise.all([
+    run('gradle', ['--version']),
+    resolvePath('gradle')
+  ]);
+  const match = result?.stdout?.match(/Gradle ([\d.]+)/);
+  return [{
+    tool: 'gradle',
+    found: match?.[1] ?? null,
+    raw: result?.stdout ?? null,
+    path: binPath,
+    managedBy: null,
+    reason: match ? undefined : 'gradle not found',
+  }];
+}
+
+async function probeMaven(): Promise<ProbeResult[]> {
+  const [result, binPath] = await Promise.all([
+    run('mvn', ['--version']),
+    resolvePath('mvn')
+  ]);
+  const match = result?.stdout?.match(/Apache Maven ([\d.]+)/);
+  return [{
+    tool: 'maven',
+    found: match?.[1] ?? null,
+    raw: result?.stdout ?? null,
+    path: binPath,
+    managedBy: null,
+    reason: match ? undefined : 'maven not found',
+  }];
+}
+
 
 async function probeGo(platform: Platform): Promise<ProbeResult[]> {
   const [result, binPath] = await Promise.all([
@@ -294,6 +360,62 @@ async function probeGo(platform: Platform): Promise<ProbeResult[]> {
     managedBy: null,
     reason: match ? undefined : 'go not found',
   }];
+}
+
+async function probeRust(): Promise<ProbeResult[]> {
+  const [rust, cargo] = await Promise.all([probeSimple('rustc'), probeCargo()]);
+  return [
+    { ...rust[0], tool: 'rust' },
+    { ...cargo[0] }
+  ];
+}
+
+async function probePhp(): Promise<ProbeResult[]> {
+  const [php, composer] = await Promise.all([probeSimple('php'), probeComposer()]);
+  return [
+    { ...php[0], tool: 'php' },
+    { ...composer[0] }
+  ];
+}
+
+async function probeDotNet(): Promise<ProbeResult[]> {
+  const [result, binPath] = await Promise.all([
+    run('dotnet', ['--version']),
+    resolvePath('dotnet')
+  ]);
+  const version = parseVersion(result?.stdout ?? null);
+  return [{
+    tool: 'dotnet',
+    found: version,
+    raw: result?.stdout ?? null,
+    path: binPath,
+    managedBy: null,
+    reason: version ? undefined : 'dotnet not found',
+  }];
+}
+
+async function probeElixir(): Promise<ProbeResult[]> {
+  const [elixir, mix] = await Promise.all([probeSimple('elixir'), probeMix()]);
+  return [
+    { ...elixir[0], tool: 'elixir' },
+    { ...mix[0] }
+  ];
+}
+
+async function probeCpp(): Promise<ProbeResult[]> {
+  const [cmake, make] = await Promise.all([probeCmake(), probeMake()]);
+  return [
+    { ...cmake[0] },
+    { ...make[0] }
+  ];
+}
+
+async function probeFlutter(): Promise<ProbeResult[]> {
+  const [flutter, dart] = await Promise.all([probeSimple('flutter'), probeDart()]);
+  return [
+    { ...flutter[0], tool: 'flutter' },
+    { ...dart[0] }
+  ];
 }
 
 async function probeEnvVars(projectPath: string): Promise<ProbeResult[]> {

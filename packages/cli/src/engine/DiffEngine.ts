@@ -85,8 +85,8 @@ function evaluateConflictRequirement(req: StackRequirement): CheckResult {
 
 function evaluateToolRequirement(req: StackRequirement, probes: ProbeResult[]): CheckResult {
   const matchingProbes = probes.filter(p => p.tool === req.tool);
-  const isRuntime = ['node', 'python', 'go', 'ruby'].includes(req.tool);
-  const isPackageManager = ['pnpm', 'yarn', 'npm'].includes(req.tool);
+  const isRuntime = ['node', 'python', 'go', 'ruby', 'java', 'rust', 'php', 'dotnet', 'elixir', 'dart'].includes(req.tool);
+  const isPackageManager = ['pnpm', 'yarn', 'npm', 'gradle', 'maven', 'cargo', 'composer', 'mix', 'cmake', 'make', 'flutter'].includes(req.tool);
   
   const category: Category = isRuntime ? 'runtime' : isPackageManager ? 'package_manager' : 'tool';
   const defaultSeverity: Severity = isRuntime ? 'critical' : 'warning';
