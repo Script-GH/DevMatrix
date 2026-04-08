@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, render, useInput, useApp } from 'ink';
+import { Box, Text, render, Transform, useInput, useApp } from 'ink';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import { HealthReport, CheckResult } from '@devpulse/shared';
@@ -89,43 +89,28 @@ const AICard = ({ check }: { check: CheckResult }) => (
     )}
   </Box>
 );
-
-const Footer = ({ activeAction }: { activeAction: string | null }) => (
-    <Box gap={2} marginTop={1} flexDirection="column">
-        <Box gap={2}>
-            <Box borderStyle="round" borderColor={activeAction === 'fix' ? 'green' : 'dim'} paddingX={1}>
-                <Text color={activeAction === 'fix' ? 'green' : 'white'}>[F] Fix All</Text>
-            </Box>
-            <Box borderStyle="round" borderColor={activeAction === 'advice' ? 'cyan' : 'dim'} paddingX={1}>
-                <Text color={activeAction === 'advice' ? 'cyan' : 'white'}>[A] Get Advice</Text>
-            </Box>
-            <Box borderStyle="round" borderColor="dim" paddingX={1}>
-                <Text>[Q] Quit</Text>
-            </Box>
+const Footer = () => (
+    <Box gap={2} marginTop={1}>
+        <Box borderStyle="round" borderColor="yellow" paddingX={1}>
+            <Text>Press <Text bold color="yellow">f</Text> to Fix with Agent</Text>
         </Box>
-        {activeAction === 'fix' && (
-            <Box marginTop={1}>
-                <Text color="green">⚡ Running automatic fixes... (Simulated)</Text>
-            </Box>
-        )}
-        {activeAction === 'advice' && (
-            <Box marginTop={1}>
-                <Text color="cyan">🤖 Analyzing environment for deep advice... (Simulated)</Text>
-            </Box>
-        )}
+        <Box borderStyle="round" borderColor="dim" paddingX={1}>
+            <Text>Export report</Text>
+        </Box>
     </Box>
 );
 
-const ReportDashboard = ({ 
-    initialReport, 
-    onFix, 
-    onAdvice 
-}: { 
-    initialReport: HealthReport,
-    onFix?: () => void,
-    onAdvice?: () => void
-}) => {
+const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: HealthReport, onFixRequest: () => void }) => {
   const [report, setReport] = useState(initialReport);
+  const { exit } = useApp();
+
+  useInput((input, key) => {
+    if (input === 'f') {
+        onFixRequest();
+        exit();
+    }
+  });
+
   const [animatedScore, setAnimatedScore] = useState(0);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const { exit } = useApp();
@@ -217,27 +202,19 @@ const ReportDashboard = ({
   );
 };
 
-export function renderReport(
-    report: HealthReport, 
-    callbacks?: { onFix?: () => void, onAdvice?: () => void }
-) {
-  const { waitUntilExit, rerender } = render(
-    <ReportDashboard 
-        initialReport={report} 
-        onFix={callbacks?.onFix}
-        onAdvice={callbacks?.onAdvice}
-    />
-  );
+export function renderReport(report: HealthReport) {
+  let resolveFixRequest: () => void;
+  const fixPromise = new Promise<void>((resolve) => {
+    resolveFixRequest = resolve;
+  });
+
+  const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} onFixRequest={() => resolveFixRequest()} />);
+  
   return {
     waitUntilExit,
+    fixRequested: () => fixPromise,
     update: (newReport: HealthReport) => {
-        rerender(
-            <ReportDashboard 
-                initialReport={newReport} 
-                onFix={callbacks?.onFix}
-                onAdvice={callbacks?.onAdvice}
-            />
-        );
+        rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
     }
   };
 }
