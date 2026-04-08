@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import fs from 'fs';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import type { Interface } from 'node:readline/promises';
 
 type FixOutcome = 'fixed' | 'skipped' | 'failed';
 
@@ -18,6 +19,8 @@ type FixStats = {
 const MAX_ATTEMPTS = 3;
 
 type ReviewDecision = 'approve' | 'reject';
+let promptRl: Interface | null = null;
+let ttyFd: number | null = null;
 
 function normalizeStdinForPrompts() {
     try {
@@ -30,22 +33,46 @@ function normalizeStdinForPrompts() {
     }
 }
 
+function getPromptInterface(): Interface {
+    if (promptRl) return promptRl;
+
+    if (fs.existsSync('/dev/tty')) {
+        ttyFd = fs.openSync('/dev/tty', 'r+');
+        const ttyInput = fs.createReadStream('', { fd: ttyFd, autoClose: false });
+        const ttyOutput = fs.createWriteStream('', { fd: ttyFd, autoClose: false });
+        promptRl = createInterface({ input: ttyInput, output: ttyOutput, terminal: true });
+        return promptRl;
+    }
+
+    promptRl = createInterface({ input, output, terminal: true });
+    return promptRl;
+}
+
+function closePromptInterface() {
+    try {
+        promptRl?.close();
+    } catch {
+        // ignore
+    }
+    promptRl = null;
+    if (ttyFd !== null) {
+        try {
+            fs.closeSync(ttyFd);
+        } catch {
+            // ignore
+        }
+        ttyFd = null;
+    }
+}
+
 async function readLine(message: string): Promise<string | null> {
     normalizeStdinForPrompts();
-
-    // Use /dev/tty so prompts still work even if stdin gets detached after Ink exits.
-    const ttyInput = fs.existsSync('/dev/tty') ? fs.createReadStream('/dev/tty') : input;
-    const ttyOutput = fs.existsSync('/dev/tty') ? fs.createWriteStream('/dev/tty') : output;
-    const rl = createInterface({ input: ttyInput, output: ttyOutput });
     try {
+        const rl = getPromptInterface();
         const answer = await rl.question(message);
         return answer.trim();
     } catch {
         return null;
-    } finally {
-        rl.close();
-        if (ttyInput !== input) ttyInput.destroy();
-        if (ttyOutput !== output) ttyOutput.end();
     }
 }
 
@@ -79,15 +106,14 @@ async function askToRetry(): Promise<boolean> {
 }
 
 async function executeCommand(command: string, issueId: string): Promise<{ ok: boolean; errorOutput?: string }> {
-    const s = spinner();
-    s.start(`Executing: ${command}`);
-
+    log.step(chalk.cyan(`Running: ${command}`));
     try {
-        await execa(command, { shell: true, all: true });
-        s.stop(chalk.green(`Success! Fixed ${issueId}`));
+        // Stream command output directly so long-running installs do not look frozen.
+        await execa(command, { shell: true, stdio: 'inherit' });
+        log.success(chalk.green(`Success! Fixed ${issueId}`));
         return { ok: true };
     } catch (err: any) {
-        s.stop(chalk.red('Failed to execute command.'));
+        log.error(chalk.red('Failed to execute command.'));
         const errorOutput = String(err?.all || err?.stderr || err?.message || 'Unknown command error');
         log.error(`Error Output:\n${chalk.gray(errorOutput)}`);
         return { ok: false, errorOutput };
@@ -156,18 +182,22 @@ export async function runAgentFixer(failures: CheckResult[]) {
         return;
     }
 
-    log.warn(`Found ${failures.length} issues requiring attention.`);
-    const stats: FixStats = { fixed: 0, skipped: 0, failed: 0 };
+    try {
+        log.warn(`Found ${failures.length} issues requiring attention.`);
+        const stats: FixStats = { fixed: 0, skipped: 0, failed: 0 };
 
-    for (const issue of failures) {
-        const outcome = await processIssue(issue);
-        stats[outcome] += 1;
+        for (const issue of failures) {
+            const outcome = await processIssue(issue);
+            stats[outcome] += 1;
+        }
+
+        log.step(
+            `Results: ${chalk.green(`${stats.fixed} fixed`)}, ` +
+            `${chalk.yellow(`${stats.skipped} skipped`)}, ` +
+            `${chalk.red(`${stats.failed} failed`)}`
+        );
+        outro(chalk.bold.green('Agent finished all fix attempts! Run `dmx scan` again to verify.'));
+    } finally {
+        closePromptInterface();
     }
-
-    log.step(
-        `Results: ${chalk.green(`${stats.fixed} fixed`)}, ` +
-        `${chalk.yellow(`${stats.skipped} skipped`)}, ` +
-        `${chalk.red(`${stats.failed} failed`)}`
-    );
-    outro(chalk.bold.green('Agent finished all fix attempts! Run `dmx scan` again to verify.'));
 }

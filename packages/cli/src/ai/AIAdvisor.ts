@@ -152,9 +152,43 @@ function fallbackFixes(failures: CheckResult[], explanation: string): Partial<Ch
   return failures.map((f) => ({
     id: f.id,
     explanation,
-    fixCommand: undefined,
+    fixCommand: deriveFallbackFixCommand(f),
     risk: 'moderate'
   }));
+}
+
+function deriveFallbackFixCommand(issue: CheckResult): string | undefined {
+  // Package requirements discovered from package.json checks (e.g., npm_pkg:foo).
+  if (issue.id.startsWith('npm_pkg:')) {
+    const pkg = issue.name.replace(/^npm_pkg:/, '').trim();
+    if (!pkg) return undefined;
+    const version = issue.required?.trim();
+    return version ? `npm install ${pkg}@${version}` : `npm install ${pkg}`;
+  }
+
+  // Missing env vars: append placeholders to local .env (non-destructive, editable).
+  if (issue.category === 'env_var' || issue.id.startsWith('env-')) {
+    const key = issue.required?.trim();
+    if (!key) return undefined;
+    return `touch .env && (grep -q '^${key}=' .env || echo '${key}=' >> .env)`;
+  }
+
+  // Common runtime/tool issues.
+  if (issue.name === 'pnpm') {
+    return issue.required ? `npm install -g pnpm@${issue.required.replace(/^v/, '')}` : 'npm install -g pnpm';
+  }
+
+  if (issue.name === 'node') {
+    return issue.required
+      ? `nvm install ${issue.required.replace(/^v/, '')} && nvm use ${issue.required.replace(/^v/, '')}`
+      : 'nvm install --lts && nvm use --lts';
+  }
+
+  if (issue.name === 'docker:daemon' || issue.id.includes('docker:daemon')) {
+    return "open -a Docker || (command -v colima >/dev/null && colima start) || sudo systemctl start docker";
+  }
+
+  return undefined;
 }
 
 function normalizeFix(item: any): Partial<CheckResult> | null {
