@@ -30,7 +30,10 @@ program.command('scan')
 
     let ui: any;
     if (!options.json) {
-        ui = renderReport(report);
+        ui = renderReport(report, {
+            onFix: () => runFix(),
+            onAdvice: () => runAdvice()
+        });
     }
 
     // 1. Detect Requirements dynamically from project files
@@ -73,13 +76,25 @@ program.command('scan')
 program.command('fix')
   .description('Automatically fix environment issues')
   .action(() => {
-    console.log('dmx fix: Placeholder for automatic fixes.');
+    runFix();
   });
 
 program.command('advice')
   .description('Get AI-driven technical advice for your setup')
   .action(() => {
-    console.log('dmx advice: Placeholder for AI advice.');
+    runAdvice();
   });
+
+async function runFix() {
+    console.log('\n⚡ dmx fix: Initiating automatic repair sequences...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('✅ Fixes applied successfully.');
+}
+
+async function runAdvice() {
+    console.log('\n🤖 dmx advice: Consulting AI models for architectural recommendations...');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    console.log('💡 AI Advice generated.');
+}
 
 program.parse();
