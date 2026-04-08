@@ -14,17 +14,8 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "devpulse-sidebar",
-          "title": "DevPulse",
-          "icon": "$(pulse)"
-        }
-      ]
-    },
     "views": {
-      "devpulse-sidebar": [
+      "explorer": [
         {
           "type": "webview",
           "id": "devpulse-sidebar.view",
