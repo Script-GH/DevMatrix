@@ -1,6 +1,9 @@
 {
   "name": "@devpulse/cli",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "type": "module",
   "bin": {
     "dmx": "./dist/index.js"
