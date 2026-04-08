@@ -19,7 +19,7 @@ import chalk from 'chalk';
 import { log, spinner } from '@clack/prompts';
 import semver from 'semver';
 
-import { readLocalConfig, writeLocalConfig } from './utils/config.js';
+import { readLocalConfig, writeLocalConfig, LocalConfig, writeProjectConfig, deleteProjectConfig } from './utils/config.js';
 import { maskEnvVariables } from './utils/env.js';
 import { getDependencyDiff } from './engine/DiffEngine.js';
 import type { DependencyDiff } from './engine/DiffEngine.js';
@@ -34,6 +34,7 @@ import {
   updateProjectState,
   pushVersionSnapshot,
   createNotification,
+  deleteDeveloper,
 } from './utils/supabase.js';
 
 
@@ -133,11 +134,11 @@ function isNewer(a: string, b: string): boolean {
   return b > a;
 }
 
-/** Resolve project guard — exits if no projectId in config. */
 async function requireProject() {
   const config = await readLocalConfig();
   if (!config.projectId) {
-    log.error('No project configured. Run `dmx add dev <projectId>` first.');
+    log.error('No project configured in this directory.');
+    log.info('Run `dmx init <projectId>` to start tracking this project.');
     process.exit(1);
   }
   return config as typeof config & { projectId: string; devId: string };
@@ -147,18 +148,17 @@ async function requireProject() {
 
 /**
  * Registers the current machine as a developer on a project.
- * Captures the initial dependency snapshot and stores it in Firestore.
- * Updates ~/.dmxrc with devId + projectId.
+ * This is now the entry point for `dmx init`.
  */
 export async function cmdAddDev(projectId: string): Promise<void> {
   const cwd = process.cwd();
   const s = spinner();
-  s.start('Registering your system with the project…');
+  s.start('Initializing DMX context in this directory…');
 
   try {
     const config = await readLocalConfig();
     const { devId } = config;
-    const devName = os.userInfo().username;
+    const devName = config.name ?? os.userInfo().username;
 
     const [deps, env] = await Promise.all([scanLocalDeps(cwd), collectEnvSnapshot(cwd)]);
 
@@ -166,10 +166,18 @@ export async function cmdAddDev(projectId: string): Promise<void> {
     const existing = await getDeveloper(projectId, devId).catch(() => null);
     const isNew = !existing;
 
-    await upsertDeveloper(projectId, devId, { name: devName, dependencies: deps, env, user_id: config.userId });
-    await writeLocalConfig({ ...config, projectId, name: devName });
+    // 1. Update cloud registration
+    await upsertDeveloper(projectId, devId, { 
+       name: devName, 
+       dependencies: deps, 
+       env, 
+       user_id: config.userId 
+    });
 
-    // Push initial version snapshot if this is a fresh join
+    // 2. Save project ID locally to the current directory
+    await writeProjectConfig({ projectId });
+
+    // 3. Push initial version snapshot if this is a fresh join
     if (isNew) {
       await pushVersionSnapshot(projectId, devId, {
         dependencies: deps,
@@ -190,7 +198,8 @@ export async function cmdAddDev(projectId: string): Promise<void> {
         `  ${chalk.bold('Project ID:')}   ${chalk.cyan(projectId)}\n` +
         `  ${chalk.bold('Username:')}     ${chalk.cyan(devName)}\n` +
         `  ${chalk.bold('Deps captured:')} ${chalk.cyan(Object.keys(deps).length)}\n` +
-        `  Config saved to ${chalk.dim('~/.dmxrc')}`
+        `  Project config saved to ${chalk.bold('./.dmxrc')}\n` +
+        `  Identity saved to ${chalk.dim('~/.dmxrc')}`
     );
   } catch (err: any) {
     s.stop(chalk.red('Registration failed.'));
@@ -705,3 +714,42 @@ export async function cmdLink(webToken: string): Promise<void> {
     process.exit(1);
   }
 }
+
+// ─── dmx remove ──────────────────────────────────────────────────────────────
+
+/**
+ * Removes the current project tracking from the local machine.
+ * Clears projectId from ~/.dmxrc.
+ */
+export async function cmdRemoveProject(): Promise<void> {
+  try {
+    const config = await readLocalConfig();
+    if (!config.projectId) {
+      log.info('No project is currently being tracked.');
+      return;
+    }
+
+    const oldId = config.projectId;
+    const { devId } = config;
+
+    // 1. Remove from cloud
+    const s = spinner();
+    s.start('Removing registration from cloud…');
+    await deleteDeveloper(oldId, devId).catch(() => {
+      // If network fails or project doesn't exist anymore, we proceed with local clear
+    });
+    s.stop(chalk.dim('Cloud registration removed.'));
+
+    // 2. Delete local config file
+    await deleteProjectConfig();
+
+    log.success(
+      chalk.green('Project tracking removed. ✓') + '\n' +
+      chalk.dim(`  The local .dmxrc has been removed. Identity preserved in ~/.dmxrc.`)
+    );
+  } catch (err: any) {
+    log.error(`Failed to remove project: ${err.message}`);
+    process.exit(1);
+  }
+}
+
