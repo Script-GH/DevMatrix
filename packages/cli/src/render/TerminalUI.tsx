@@ -26,7 +26,7 @@ const HorizontalProgressBar = ({ score }: { score: number }) => {
   const filled = Math.round((score / 100) * width);
   const bar = '█'.repeat(filled);
   const background = '░'.repeat(width - filled);
-  
+
   return (
     <Box flexDirection="column" width={width}>
       <Box justifyContent="space-between">
@@ -35,8 +35,8 @@ const HorizontalProgressBar = ({ score }: { score: number }) => {
         <Text dimColor>100</Text>
       </Box>
       <Box>
-         <Text color="yellow">{bar}</Text>
-         <Text dimColor>{background}</Text>
+        <Text color="yellow">{bar}</Text>
+        <Text dimColor>{background}</Text>
       </Box>
     </Box>
   );
@@ -71,33 +71,33 @@ const CheckRow = ({ check }: { check: CheckResult }) => {
 };
 
 const AICard = ({ check }: { check: CheckResult }) => (
-  <Box 
-    flexDirection="column" 
-    borderStyle="single" 
-    borderColor="yellow" 
-    padding={1} 
+  <Box
+    flexDirection="column"
+    borderStyle="single"
+    borderColor="yellow"
+    padding={1}
     marginY={1}
   >
     <Box marginBottom={1}>
-        <Text color="yellow" bold>GEMINI · FIX ADVISOR</Text>
+      <Text color="yellow" bold>GEMINI · FIX ADVISOR</Text>
     </Box>
     <Text>{check.explanation}</Text>
     {check.fixCommand && (
-        <Box marginTop={1} paddingX={1} borderStyle="bold" borderColor="dim">
-            <Text color="green">$ {check.fixCommand}</Text>
-        </Box>
+      <Box marginTop={1} paddingX={1} borderStyle="bold" borderColor="dim">
+        <Text color="green">$ {check.fixCommand}</Text>
+      </Box>
     )}
   </Box>
 );
 const Footer = () => (
-    <Box gap={2} marginTop={1}>
-        <Box borderStyle="round" borderColor="yellow" paddingX={1}>
-            <Text>Press <Text bold color="yellow">f</Text> to Fix with Agent</Text>
-        </Box>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>Export report</Text>
-        </Box>
+  <Box gap={2} marginTop={1}>
+    <Box borderStyle="round" borderColor="yellow" paddingX={1}>
+      <Text>Press <Text bold color="yellow">f</Text> to Fix with Agent</Text>
     </Box>
+    <Box borderStyle="round" borderColor="dim" paddingX={1}>
+      <Text>Export report</Text>
+    </Box>
+  </Box>
 );
 
 const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: HealthReport, onFixRequest: () => void }) => {
@@ -106,8 +106,8 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
 
   useInput((input, key) => {
     if (input === 'f') {
-        onFixRequest();
-        exit();
+      onFixRequest();
+      exit();
     }
   });
 
@@ -117,16 +117,16 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
 
   useInput(async (input) => {
     if (input === 'q') {
-        exit();
+      exit();
     }
     if (input === 'f') {
-        setActiveAction('fix');
-        await onFix?.();
-        // Keep status for a moment then could reset or update report
+      setActiveAction('fix');
+      await onFix?.();
+      // Keep status for a moment then could reset or update report
     }
     if (input === 'a') {
-        setActiveAction('advice');
-        await onAdvice?.();
+      setActiveAction('advice');
+      await onAdvice?.();
     }
   });
 
@@ -134,15 +134,15 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
     let current = animatedScore;
     const target = report.score;
     const interval = setInterval(() => {
-        if (current < target) {
-            current += 1;
-            setAnimatedScore(current);
-        } else if (current > target) {
-            current -= 1;
-            setAnimatedScore(current);
-        } else {
-            clearInterval(interval);
-        }
+      if (current < target) {
+        current += 1;
+        setAnimatedScore(current);
+      } else if (current > target) {
+        current -= 1;
+        setAnimatedScore(current);
+      } else {
+        clearInterval(interval);
+      }
     }, 20);
     return () => clearInterval(interval);
   }, [report.score]);
@@ -162,16 +162,16 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
           <Text dimColor bold>  Health score</Text>
         </Box>
         <Box flexGrow={1} justifyContent="center" alignItems="center">
-           <HorizontalProgressBar score={animatedScore} />
+          <HorizontalProgressBar score={animatedScore} />
         </Box>
       </Box>
 
       <Box flexDirection="column" marginBottom={2}>
         <Box marginBottom={1}>
-           <Text dimColor bold>RUNTIMES & TOOLING</Text>
+          <Text dimColor bold>RUNTIMES & TOOLING</Text>
         </Box>
         {report.checks.filter(c => ['runtime', 'package_manager', 'tool'].includes(c.category)).map(c => (
-           <CheckRow key={c.id} check={c} />
+          <CheckRow key={c.id} check={c} />
         ))}
       </Box>
 
@@ -181,19 +181,19 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
           <Text dimColor bold>ENVIRONMENT VARIABLES</Text>
         </Box>
         {report.checks.filter(c => c.category === 'env_var').map(c => (
-           <CheckRow key={c.id} check={c} />
+          <CheckRow key={c.id} check={c} />
         ))}
       </Box>
 
       {/* AI Diagnosis */}
       {report.checks.some(c => !c.passed && c.explanation) && (
         <Box flexDirection="column" marginBottom={1}>
-            <Box marginBottom={1}>
-              <Text dimColor bold>AI DIAGNOSIS</Text>
-            </Box>
-            {report.checks.filter(c => !c.passed && c.explanation).map(c => (
-               <AICard key={c.id} check={c} />
-            ))}
+          <Box marginBottom={1}>
+            <Text dimColor bold>AI DIAGNOSIS</Text>
+          </Box>
+          {report.checks.filter(c => !c.passed && c.explanation).map(c => (
+            <AICard key={c.id} check={c} />
+          ))}
         </Box>
       )}
 
@@ -209,12 +209,12 @@ export function renderReport(report: HealthReport) {
   });
 
   const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} onFixRequest={() => resolveFixRequest()} />);
-  
+
   return {
     waitUntilExit,
     fixRequested: () => fixPromise,
     update: (newReport: HealthReport) => {
-        rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
+      rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
     }
   };
 }
