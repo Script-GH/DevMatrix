@@ -14,7 +14,7 @@ import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { getAIFixes, getTechnicalAdvice } from './ai/AIAdvisor.js';
 import { HealthReport } from '@devpulse/shared';
-import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink } from './commands.js';
+import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink, cmdRemoveProject } from './commands.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.devpulse');
 const CONFIG_ENV_PATH = path.join(CONFIG_DIR, '.env');
@@ -210,6 +210,15 @@ program.command('auth')
     outro('You are ready to use AI fixes. Run `dmx scan` from anywhere.');
   });
 
+// ─── dmx init ────────────────────────────────────────────────────────────────
+
+program
+  .command('init <projectId>')
+  .description('Initialize DMX project tracking in the current directory')
+  .action(async (projectId: string) => {
+    await cmdAddDev(projectId);
+  });
+
 // ─── dmx add ─────────────────────────────────────────────────────────────────
 
 const addCmd = program
@@ -218,7 +227,7 @@ const addCmd = program
 
 addCmd
   .command('dev <projectId>')
-  .description('Join a project and register your system as a developer')
+  .description('Initialize DMX project tracking (alias for init)')
   .action(async (projectId: string) => {
     await cmdAddDev(projectId);
   });
@@ -291,6 +300,15 @@ program
   .description('Link this CLI to your DMX web account')
   .action(async (webToken: string) => {
     await cmdLink(webToken);
+  });
+
+// ─── dmx remove ──────────────────────────────────────────────────────────────
+
+program
+  .command('remove')
+  .description('Remove the current project tracking association from this machine')
+  .action(async () => {
+    await cmdRemoveProject();
   });
 
 
