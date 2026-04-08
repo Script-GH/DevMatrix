@@ -162,8 +162,12 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
                 if (sec.items.length === 0) return;
                 html += '<div><h3>' + sec.title + '</h3>';
                 sec.items.forEach(c => {
-                    const reqStr = c.required ? ' · Req: ' + c.required : '';
-                    const foundStr = c.found ? 'Found ' + c.found : 'Missing';
+                    let foundStr = '';
+                    if (!c.found || c.found === 'Not found' || c.found === 'missing' || c.found === 'Missing') {
+                        foundStr = '<span style="color:var(--vscode-errorForeground)">Missing</span>';
+                    } else {
+                        foundStr = 'Found ' + c.found;
+                    }
                     html += '<div class="check-item">' +
                         '<div class="icon-container">' + getIcon(c.passed, c.severity) + '</div>' +
                         '<div class="check-details">' +

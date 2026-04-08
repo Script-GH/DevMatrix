@@ -5,17 +5,17 @@ import { EnvKeyResult } from '../scanner/EnvParser.js';
 import semver from 'semver';
 
 const SEVERITY_WEIGHTS: Record<Severity, number> = {
-  critical: 25,
-  warning: 10,
-  info: 3,
+  critical: 15, // Reduced from 25
+  warning: 5,   // Reduced from 10
+  info: 1,      // Reduced from 3
 };
 
 const CATEGORY_MULTIPLIERS: Record<Category, number> = {
   runtime: 1.5,
-  package_manager: 1.2,
-  env_var: 1.3,
-  tool: 0.8,
-  config: 0.6,
+  package_manager: 1.0, // Reduced from 1.2
+  env_var: 0.5,         // Significantly reduced from 1.3 - multiple missing env vars shouldn't kill the score
+  tool: 0.5,            // Reduced from 0.8
+  config: 0.4,          // Reduced from 0.6
 };
 
 export function computeScore(checks: CheckResult[]): number {
@@ -29,7 +29,9 @@ export function computeScore(checks: CheckResult[]): number {
       deductions += base * mult;
     }
   }
-  return Math.max(0, Math.round(100 - deductions));
+  
+  // Cap deductions so 0 is only reached if multiple critical things are broken
+  return Math.max(0, Math.round(100 - (deductions * 0.8))); // Added an 0.8 dampener to make it even more forgiving
 }
 
 export function evaluateEnvironment(

@@ -2,6 +2,34 @@ import fs from 'fs/promises';
 import path from 'path';
 import { parse as parseToml } from '@iarna/toml';
 
+// ─── Source file extensions to sample per language ──────────────────
+const SOURCE_EXTENSIONS: Record<string, string[]> = {
+  python:  ['.py'],
+  node:    ['.js', '.ts', '.mjs', '.cjs'],
+  java:    ['.java'],
+  ruby:    ['.rb'],
+  php:     ['.php'],
+  rust:    ['.rs'],
+  go:      ['.go'],
+  elixir:  ['.ex', '.exs'],
+  dart:    ['.dart'],
+  cpp:     ['.cpp', '.cc', '.cxx', '.c', '.h', '.hpp'],
+};
+
+// ─── Import patterns per language ──────────────────────────────────
+const IMPORT_PATTERNS: Record<string, RegExp[]> = {
+  python: [/^\s*import\s+\w+/m, /^\s*from\s+\w+\s+import/m],
+  node:   [/^\s*import\s+.+\s+from\s+['"][^.]/m, /require\s*\(['"][^.]/m],
+  java:   [/^\s*import\s+(?:java|javax|org|com|net)\./m],
+  ruby:   [/^\s*require\s+['"]\w/m, /^\s*gem\s+['"]\w/m],
+  php:    [/<\?php/m, /^\s*namespace\s+\w/m, /^\s*use\s+\w/m],
+  rust:   [/^\s*use\s+\w+::/m, /^extern\s+crate\s+/m],
+  go:     [/^\s*import\s+[("](?:fmt|os|net|github\.com)/m],
+  elixir: [/^\s*(?:use|import|alias)\s+[A-Z]/m, /^defmodule\s+/m],
+  dart:   [/^\s*import\s+'(?:dart:|package:)/m],
+  cpp:    [/#include\s+[<"]/m],
+};
+
 export interface StackRequirement {
   tool: string;
   required: string | null;
@@ -65,6 +93,12 @@ export async function detectStack(projectPath: string): Promise<StackRequirement
     if (files.includes('build.gradle') || files.includes('build.gradle.kts') || files.includes('pom.xml')) tasks.push(readJava(dir));
     tasks.push(readExtendedHeuristics(dir, files));
   }
+
+  // 3. Structural pattern analysis (runs once on root)
+  tasks.push(analyzeStructuralPatterns(projectPath, dirEntries));
+
+  // 4. Code import analysis (fallback inference)
+  tasks.push(analyzeCodeImports(projectPath, dirEntries));
 
   const results = await Promise.allSettled(tasks);
 
@@ -275,6 +309,171 @@ async function readExtendedHeuristics(root: string, files: string[]): Promise<St
     reqs.push({ tool: 'dotnet', required: null, source: formatSource(root, 'dotnet-heuristic'), rangeType: 'unknown' });
   }
 
+  return reqs;
+}
+
+// ─── Structural Pattern Analysis ─────────────────────────────────────
+// Detect language environments from signature directories/artifacts,
+// even when manifest files are absent.
+async function analyzeStructuralPatterns(
+  rootPath: string,
+  dirEntries: Map<string, string[]>
+): Promise<StackRequirement[]> {
+  const reqs: StackRequirement[] = [];
+  const rootFiles = dirEntries.get(rootPath) || [];
+
+  // All scanned dirs for broader checks
+  const allDirs = [...dirEntries.keys()];
+
+  // ── node_modules/ present → Node.js runtime required ──
+  if (rootFiles.includes('node_modules')) {
+    reqs.push({ tool: 'node', required: null, source: 'structural/node_modules', rangeType: 'unknown' });
+  }
+
+  // ── yarn.lock / package-lock.json → specific package manager ──
+  if (rootFiles.includes('yarn.lock')) {
+    reqs.push({ tool: 'yarn', required: null, source: 'structural/yarn.lock', rangeType: 'unknown' });
+  } else if (rootFiles.includes('pnpm-lock.yaml')) {
+    reqs.push({ tool: 'pnpm', required: null, source: 'structural/pnpm-lock.yaml', rangeType: 'unknown' });
+  } else if (rootFiles.includes('package-lock.json')) {
+    reqs.push({ tool: 'npm', required: null, source: 'structural/package-lock.json', rangeType: 'unknown' });
+  } else if (rootFiles.includes('bun.lockb')) {
+    reqs.push({ tool: 'bun', required: null, source: 'structural/bun.lockb', rangeType: 'unknown' });
+  }
+
+  // ── Python venv directory → Python runtime required ──
+  const pythonVenvDirs = ['venv', '.venv', 'env', '.env', '__pypackages__'];
+  if (pythonVenvDirs.some(v => rootFiles.includes(v))) {
+    reqs.push({ tool: 'python', required: null, source: 'structural/venv-dir', rangeType: 'unknown' });
+  }
+  // *.pyc bytecode files anywhere
+  const hasPyc = allDirs.some(d => (dirEntries.get(d) || []).some(f => f.endsWith('.pyc')));
+  if (hasPyc) {
+    reqs.push({ tool: 'python', required: null, source: 'structural/pyc-artifacts', rangeType: 'unknown' });
+  }
+
+  // ── src/main/java → Java Maven/Gradle project ──
+  const srcMain = path.join(rootPath, 'src', 'main', 'java');
+  try {
+    await fs.access(srcMain);
+    reqs.push({ tool: 'java', required: null, source: 'structural/src/main/java', rangeType: 'unknown' });
+    // Also check for gradle wrapper
+    if (rootFiles.includes('gradlew') || rootFiles.includes('gradlew.bat')) {
+      reqs.push({ tool: 'gradle', required: null, source: 'structural/gradlew', rangeType: 'unknown' });
+    }
+  } catch {}
+
+  // ── .class files → Java ──
+  const hasClass = allDirs.some(d => (dirEntries.get(d) || []).some(f => f.endsWith('.class')));
+  if (hasClass) {
+    reqs.push({ tool: 'java', required: null, source: 'structural/class-artifacts', rangeType: 'unknown' });
+  }
+
+  // ── vendor/ + app/Http → PHP/Laravel ──
+  if (rootFiles.includes('vendor') && rootFiles.includes('app')) {
+    const appSubdirs = dirEntries.get(path.join(rootPath, 'app')) || [];
+    if (appSubdirs.includes('Http')) {
+      reqs.push({ tool: 'php', required: null, source: 'structural/laravel-app-structure', rangeType: 'unknown' });
+      reqs.push({ tool: 'composer', required: null, source: 'structural/laravel-app-structure', rangeType: 'unknown' });
+    }
+  }
+
+  // ── target/ directory (Rust cargo build) ──
+  if (rootFiles.includes('target')) {
+    const targetFiles = dirEntries.get(path.join(rootPath, 'target')) || [];
+    if (targetFiles.includes('debug') || targetFiles.includes('release')) {
+      reqs.push({ tool: 'rust', required: null, source: 'structural/cargo-target', rangeType: 'unknown' });
+      reqs.push({ tool: 'cargo', required: null, source: 'structural/cargo-target', rangeType: 'unknown' });
+    }
+  }
+
+  // ── __pycache__ → Python ──
+  if (rootFiles.includes('__pycache__') || allDirs.some(d => (dirEntries.get(d) || []).includes('__pycache__'))) {
+    reqs.push({ tool: 'python', required: null, source: 'structural/__pycache__', rangeType: 'unknown' });
+  }
+
+  // ── .git/config: repository clue ── (already covered by probeGit, skip)
+
+  return reqs;
+}
+
+// ─── Code Import Analysis ─────────────────────────────────────────────
+// Sample up to MAX_SAMPLE source files per language, regex match import
+// patterns to infer core runtime requirements even without manifests.
+const MAX_SAMPLE = 5;
+const MAX_FILE_BYTES = 32_768; // read first 32KB only for speed
+
+async function analyzeCodeImports(
+  rootPath: string,
+  dirEntries: Map<string, string[]>
+): Promise<StackRequirement[]> {
+  const reqs: StackRequirement[] = [];
+  const detected = new Set<string>(); // avoid adding the same runtime twice
+
+  // Gather candidate files: root + one level deep, excluding noisy dirs
+  const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'target', '__pycache__', '.gradle', 'bin', 'obj']);
+
+  const candidates: { lang: string; filePath: string }[] = [];
+
+  for (const [dir, files] of dirEntries) {
+    const dirName = path.basename(dir);
+    if (IGNORE_DIRS.has(dirName)) continue;
+
+    for (const [lang, exts] of Object.entries(SOURCE_EXTENSIONS)) {
+      for (const file of files) {
+        if (exts.some(ext => file.endsWith(ext))) {
+          candidates.push({ lang, filePath: path.join(dir, file) });
+        }
+      }
+    }
+  }
+
+  // Group candidates by language and sample top MAX_SAMPLE per language
+  const byLang = new Map<string, string[]>();
+  for (const { lang, filePath } of candidates) {
+    if (!byLang.has(lang)) byLang.set(lang, []);
+    byLang.get(lang)!.push(filePath);
+  }
+
+  const tasks: Promise<void>[] = [];
+
+  for (const [lang, files] of byLang) {
+    const sample = files.slice(0, MAX_SAMPLE);
+    const patterns = IMPORT_PATTERNS[lang];
+    if (!patterns || detected.has(lang)) continue;
+
+    tasks.push((async () => {
+      for (const filePath of sample) {
+        if (detected.has(lang)) break;
+        try {
+          // Read only first MAX_FILE_BYTES for performance
+          const fd = await fs.open(filePath, 'r');
+          const buf = Buffer.alloc(MAX_FILE_BYTES);
+          const { bytesRead } = await fd.read(buf, 0, MAX_FILE_BYTES, 0);
+          await fd.close();
+          const content = buf.toString('utf8', 0, bytesRead);
+
+          const matched = patterns.some(p => p.test(content));
+          if (matched) {
+            detected.add(lang);
+            // Map internal lang key to tool name
+            const toolName = lang === 'node' ? 'node' : lang;
+            reqs.push({
+              tool: toolName,
+              required: null,
+              source: `import-analysis/${path.basename(filePath)}`,
+              rangeType: 'unknown'
+            });
+            // For interpreted langs, also require their package manager
+            if (lang === 'rust') reqs.push({ tool: 'cargo', required: null, source: 'import-analysis/Cargo.rs', rangeType: 'unknown' });
+            if (lang === 'dart')  reqs.push({ tool: 'flutter', required: null, source: 'import-analysis/dart-file', rangeType: 'unknown' });
+          }
+        } catch { /* unreadable file – skip */ }
+      }
+    })());
+  }
+
+  await Promise.allSettled(tasks);
   return reqs;
 }
 
