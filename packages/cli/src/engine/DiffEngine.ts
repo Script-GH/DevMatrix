@@ -3,6 +3,7 @@ import { StackRequirement } from '../scanner/StackDetector.js';
 import { ProbeResult } from '../scanner/SystemProber.js';
 import { EnvKeyResult } from '../scanner/EnvParser.js';
 import semver from 'semver';
+import type { DependencyMap } from '../scanner/StackDetector.js';
 
 const SEVERITY_WEIGHTS: Record<Severity, number> = {
   critical: 25,
@@ -34,6 +35,49 @@ export function computeScore(checks: CheckResult[]): number {
   if (totalWeight <= 0) return 100;
   const score = 100 - (failedWeight / totalWeight) * 100;
   return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+// ─── Dependency Diff ─────────────────────────────────────────────────────────
+
+export interface DependencyChange {
+  name: string;
+  oldVersion: string;
+  newVersion: string;
+}
+
+export interface DependencyDiff {
+  added: string[];           // names only (new keys)
+  updated: DependencyChange[];
+  removed: string[];         // names only
+}
+
+/**
+ * Computes the diff between two dependency maps.
+ * Returns added, updated (with version change), and removed entries.
+ */
+export function getDependencyDiff(
+  oldDeps: DependencyMap,
+  newDeps: DependencyMap
+): DependencyDiff {
+  const added: string[] = [];
+  const updated: DependencyChange[] = [];
+  const removed: string[] = [];
+
+  for (const [name, newVer] of Object.entries(newDeps)) {
+    if (!(name in oldDeps)) {
+      added.push(name);
+    } else if (oldDeps[name] !== newVer) {
+      updated.push({ name, oldVersion: oldDeps[name], newVersion: newVer });
+    }
+  }
+
+  for (const name of Object.keys(oldDeps)) {
+    if (!(name in newDeps)) {
+      removed.push(name);
+    }
+  }
+
+  return { added, updated, removed };
 }
 
 export function evaluateEnvironment(
