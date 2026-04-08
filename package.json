@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0",
+    "vscode": "^1.85.0"
   },
   "packageManager": "pnpm@9.0.0",
   "workspaces": [
     "packages/*",
     "shared"
-  ]
+  ],
+  "scripts": {
+    "scan": "npm --prefix packages/cli run dev -- scan",
+    "dmx": "npm --prefix packages/cli run dev --"
+  }
 }

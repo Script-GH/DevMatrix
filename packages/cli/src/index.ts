@@ -7,6 +7,7 @@ import { intro, outro, password, log } from '@clack/prompts';
 import chalk from 'chalk';
 import { probeSystem } from './scanner/SystemProber.js';
 import { detectStack } from './scanner/StackDetector.js';
+import { parseEnv } from './scanner/EnvParser.js';
 import { computeScore, evaluateEnvironment } from './engine/DiffEngine.js';
 import { getAIFixes } from './ai/AIAdvisor.js';
 import { runAgentFixer } from './ai/AgentRunner.js';
@@ -36,25 +37,43 @@ program.command('scan')
 
     let ui: any;
     if (!options.json) {
-        ui = renderReport(report);
+        ui = renderReport(report, {
+            onFix: () => runFix(),
+            onAdvice: () => runAdvice()
+        });
     }
 
-    // 1. Detect Requirements dynamically from project files
-    const reqs = await detectStack(cwd);
-    report.detectedStacks = [...new Set(reqs.map(r => r.tool))];
-    if (ui) ui.update({ ...report });
+    // 1. Parallel Discovery & Scanning
+    // Discovery subdirs (matching StackDetector logic)
+    const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+    const subdirs = entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+        .map(e => path.join(cwd, e.name));
 
-    // 2. Probe System based on installed binaries and configurations
-    const probes = await probeSystem(cwd);
+    // Run all scanners in parallel for maximum performance
+    const [reqs, probes, envParseResults] = await Promise.all([
+        detectStack(cwd),
+        probeSystem(cwd),
+        parseEnv(cwd, subdirs)
+    ]);
+
+    report.detectedStacks = [...new Set(reqs.map(r => r.tool))];
     
-    // 3. DiffEngine evaluate to synthesize differences into checks
-    const checks = evaluateEnvironment(reqs, probes);
+    // 2. DiffEngine evaluate
+    const envKeys = envParseResults.flatMap(r => r.keys);
+    const checks = evaluateEnvironment(reqs, probes, envKeys);
     report.checks = checks;
 
-    // 4. Compute Score
+    // 3. Compute Score
     const score = computeScore(checks);
     report.score = score;
-    report.summary = score === 100 ? "Your environment is perfectly configured!" : "DevPulse generated the following diagnostics against your workspace.";
+    if (score === -1) {
+        report.score = 0;
+        report.summary = "No project requirements detected. Is this the project root?";
+    } else {
+        report.summary = score === 100 ? "Your environment is perfectly configured!" : "DevPulse generated diagnostics against your workspace.";
+    }
+    
     if (ui) ui.update({ ...report });
 
     // 5. Fetch AI Context for Failures

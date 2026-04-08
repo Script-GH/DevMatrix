@@ -112,6 +112,23 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
   });
 
   const [animatedScore, setAnimatedScore] = useState(0);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const { exit } = useApp();
+
+  useInput(async (input) => {
+    if (input === 'q') {
+        exit();
+    }
+    if (input === 'f') {
+        setActiveAction('fix');
+        await onFix?.();
+        // Keep status for a moment then could reset or update report
+    }
+    if (input === 'a') {
+        setActiveAction('advice');
+        await onAdvice?.();
+    }
+  });
 
   useEffect(() => {
     let current = animatedScore;
@@ -130,10 +147,9 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
     return () => clearInterval(interval);
   }, [report.score]);
 
-  // Listen for updates from the parent if needed (via ref or global bus) - 
-  // though here we'll assume the component might be re-rendered with new props
   useEffect(() => {
     setReport(initialReport);
+    setActiveAction(null); // Reset action on new report
   }, [initialReport]);
 
   const bigScore = figlet.textSync(animatedScore.toString(), { font: 'Standard' });
@@ -181,7 +197,7 @@ const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: Healt
         </Box>
       )}
 
-      <Footer />
+      <Footer activeAction={activeAction} />
     </Box>
   );
 };
