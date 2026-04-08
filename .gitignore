@@ -10,3 +10,6 @@ yarn-error.log*
 lerna-debug.log*
 .DS_Store
 *.log
+packages/extension/node_modules
+package-lock.json
+packages/extension/package-lock.json
