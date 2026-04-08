@@ -62,8 +62,9 @@ export async function detectStack(projectPath: string): Promise<StackRequirement
     if (files.includes('go.mod')) tasks.push(readGoMod(dir));
     if (files.includes('Dockerfile')) tasks.push(readDockerfile(dir));
     if (files.includes('.env.example') || files.includes('.env.template')) tasks.push(readEnvExample(dir));
-    if (files.includes('build.gradle') || files.includes('build.gradle.kts') || files.includes('pom.xml')) tasks.push(readJava(dir));
-    tasks.push(readExtendedHeuristics(dir, files));
+    if (files.includes('requirements.txt')) tasks.push(readRequirementsTxt(dir));
+    
+    tasks.push(readToolHeuristics(dir, files));
   }
 
   const results = await Promise.allSettled(tasks);
@@ -115,6 +116,27 @@ async function readPackageJson(root: string): Promise<StackRequirement[]> {
       rangeType: version ? 'exact' : 'unknown'
     });
   }
+  if (pkg.dependencies) {
+    for (const [dep, version] of Object.entries(pkg.dependencies)) {
+      reqs.push({
+        tool: `npm_pkg:${dep}`,
+        required: version as string,
+        source: formatSource(root, 'package.json#dependencies'),
+        rangeType: 'semver-range'
+      });
+    }
+  }
+  if (pkg.devDependencies) {
+    for (const [dep, version] of Object.entries(pkg.devDependencies)) {
+      reqs.push({
+        tool: `npm_pkg:${dep}`,
+        required: version as string,
+        source: formatSource(root, 'package.json#devDependencies'),
+        rangeType: 'semver-range'
+      });
+    }
+  }
+
   return reqs;
 }
 
@@ -157,6 +179,56 @@ async function readPyprojectToml(root: string): Promise<StackRequirement[]> {
     });
   }
 
+  const poetryDeps = parsed?.tool?.poetry?.dependencies;
+  if (poetryDeps) {
+      for (const [dep, version] of Object.entries(poetryDeps)) {
+          if (dep.toLowerCase() === 'python') continue;
+          reqs.push({
+              tool: `pip_pkg:${dep.toLowerCase()}`,
+              required: typeof version === 'string' ? version : (version as any).version || '*',
+              source: formatSource(root, 'pyproject.toml#poetry'),
+              rangeType: 'semver-range'
+          });
+      }
+  }
+
+  const projectDeps = parsed?.project?.dependencies;
+  if (Array.isArray(projectDeps)) {
+      for (const depStr of projectDeps) {
+          const match = depStr.match(/^([a-zA-Z0-9_-]+)(.*?)$/);
+          if (match) {
+              const dep = match[1].toLowerCase();
+              const version = match[2].trim() || '*';
+              reqs.push({
+                  tool: `pip_pkg:${dep}`,
+                  required: version,
+                  source: formatSource(root, 'pyproject.toml'),
+                  rangeType: 'semver-range'
+              });
+          }
+      }
+  }
+
+  return reqs;
+}
+
+async function readRequirementsTxt(root: string): Promise<StackRequirement[]> {
+  const content = await cachedReadFile(path.join(root, 'requirements.txt'));
+  const reqs: StackRequirement[] = [];
+  
+  for (const line of content.split('\n')) {
+    const clean = line.split('#')[0].trim();
+    if (!clean) continue;
+    const match = clean.match(/^([a-zA-Z0-9_-]+)(.*)$/);
+    if (match) {
+        reqs.push({
+            tool: `pip_pkg:${match[1].toLowerCase()}`,
+            required: match[2].trim() || '*',
+            source: formatSource(root, 'requirements.txt'),
+            rangeType: 'semver-range'
+        });
+    }
+  }
   return reqs;
 }
 

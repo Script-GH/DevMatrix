@@ -25,7 +25,7 @@ const HorizontalProgressBar = memo(({ score }: { score: number }) => {
   const filled = Math.round((score / 100) * width);
   const bar = '█'.repeat(filled);
   const background = '░'.repeat(width - filled);
-  
+
   return (
     <Box flexDirection="column" width={width}>
       <Box justifyContent="space-between">
@@ -34,8 +34,8 @@ const HorizontalProgressBar = memo(({ score }: { score: number }) => {
         <Text dimColor>100</Text>
       </Box>
       <Box>
-         <Text color="yellow">{bar}</Text>
-         <Text dimColor>{background}</Text>
+        <Text color="yellow">{bar}</Text>
+        <Text dimColor>{background}</Text>
       </Box>
     </Box>
   );
@@ -70,21 +70,21 @@ const CheckRow = ({ check }: { check: CheckResult }) => {
 };
 
 const AICard = ({ check }: { check: CheckResult }) => (
-  <Box 
-    flexDirection="column" 
-    borderStyle="single" 
-    borderColor="yellow" 
-    padding={1} 
+  <Box
+    flexDirection="column"
+    borderStyle="single"
+    borderColor="yellow"
+    padding={1}
     marginY={1}
   >
     <Box marginBottom={1}>
-        <Text color="yellow" bold>GEMINI · FIX ADVISOR</Text>
+      <Text color="yellow" bold>GEMINI · FIX ADVISOR</Text>
     </Box>
     <Text>{check.explanation}</Text>
     {check.fixCommand && (
-        <Box marginTop={1} paddingX={1} borderStyle="bold" borderColor="dim">
-            <Text color="green">$ {check.fixCommand}</Text>
-        </Box>
+      <Box marginTop={1} paddingX={1} borderStyle="bold" borderColor="dim">
+        <Text color="green">$ {check.fixCommand}</Text>
+      </Box>
     )}
   </Box>
 );
@@ -220,12 +220,12 @@ export function renderReport(report: HealthReport) {
   });
 
   const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} onFixRequest={() => resolveFixRequest()} />);
-  
+
   return {
     waitUntilExit,
     fixRequested: () => fixPromise,
     update: (newReport: HealthReport) => {
-        rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
+      rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
     }
   };
 }
