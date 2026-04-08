@@ -23,6 +23,9 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
         case 'scan':
           this.triggerScan();
           break;
+        case 'onAdvice':
+          this.triggerAdvice();
+          break;
         case 'onInfo':
           vscode.window.showInformationMessage(data.value);
           break;
@@ -95,7 +98,11 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
         try {
             // Find the JSON part in case there's extra output
             const jsonStart = stdout.indexOf('{');
-            const rawJson = stdout.substring(jsonStart);
+            const jsonEnd = stdout.lastIndexOf('}');
+            if (jsonStart === -1 || jsonEnd === -1) {
+                throw new Error('No JSON object found in output');
+            }
+            const rawJson = stdout.substring(jsonStart, jsonEnd + 1);
             const report = JSON.parse(rawJson);
             this._view?.webview.postMessage({ type: 'scanComplete', report });
         } catch (e) {
@@ -104,6 +111,35 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
             vscode.window.showErrorMessage('DevPulse: Failed to parse diagnostics from CLI');
             this._view?.webview.postMessage({ type: 'scanError', error: 'Invalid JSON' });
         }
+    });
+  }
+
+  public triggerAdvice() {
+    if (!this._view) return;
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+        vscode.window.showErrorMessage('DevPulse: No workspace folder open');
+        return;
+    }
+    
+    const rootPath = workspaceFolders[0].uri.fsPath;
+    this._view.webview.postMessage({ type: 'adviceStarted' });
+
+    const cliEntry = this.resolveCliPath();
+    
+    if (!cliEntry) {
+        vscode.window.showErrorMessage('DevPulse: CLI module missing.');
+        this._view?.webview.postMessage({ type: 'scanError', error: 'CLI module missing.', showSettings: true });
+        return;
+    }
+
+    // Call dmx advice --raw (we'll implement --raw in CLI next)
+    exec(`node "${cliEntry}" advice --raw`, { cwd: rootPath }, (error, stdout, stderr) => {
+        if (error) {
+           console.error('Advice error:', error);
+           // Not treating as fatal because it still might yield something, or API key missing
+        }
+        this._view?.webview.postMessage({ type: 'adviceComplete', advice: stdout.trim() || 'No advice returned.' });
     });
   }
 
@@ -145,6 +181,13 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
         .action-button.primary { background-color: var(--vscode-button-background); border: none; }
         .button-group { display: flex; gap: 10px; margin-top: 10px; }
         .loader { text-align: center; color: var(--vscode-descriptionForeground); margin-top: 20px; }
+        .ai-fix { margin-top: 8px; padding: 10px; background-color: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textLink-foreground); font-size: 12px; }
+        .ai-fix-title { font-weight: bold; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+        .ai-fix-command { background-color: var(--vscode-textCodeBlock-background); padding: 4px 8px; border-radius: 4px; font-family: monospace; display: flex; justify-content: space-between; align-items: center; margin-top: 8px; border: 1px solid var(--vscode-widget-border); }
+        .ai-fix-command code { word-break: break-all; }
+        .copy-btn { background: transparent; border: 1px solid var(--vscode-button-border); color: var(--vscode-button-foreground); cursor: pointer; padding: 2px 6px; border-radius: 2px; font-size: 10px; }
+        .copy-btn:hover { background-color: var(--vscode-button-hoverBackground); }
+        .advice-box { margin-top: 20px; padding: 12px; background-color: var(--vscode-textBlockQuote-background); border: 1px solid var(--vscode-widget-border); border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
     </style>
 </head>
 <body>
@@ -162,6 +205,9 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
             const message = event.data;
             if (message.type === 'scanStarted') {
                 document.getElementById('content').innerHTML = '<div class="loader">Scanning workspace...</div>';
+            } else if (message.type === 'adviceStarted') {
+                const oldContent = document.getElementById('content').innerHTML;
+                document.getElementById('content').innerHTML = '<div class="loader">Gathering AI advice...</div>' + oldContent.replace(/<div class="loader">.*?<\\/div>/, '');
             } else if (message.type === 'scanError') {
                 let html = '<div style="color:var(--vscode-errorForeground); margin-bottom: 20px;">Error: ' + message.error + '</div>';
                 if (message.showSettings) {
@@ -169,11 +215,22 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
                 }
                 document.getElementById('content').innerHTML = html;
             } else if (message.type === 'scanComplete') {
+                window.lastReport = message.report;
                 renderReport(message.report);
+            } else if (message.type === 'adviceComplete') {
+                if (window.lastReport) {
+                    renderReport(window.lastReport, message.advice);
+                }
             }
         });
 
-        function renderReport(report) {
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                vscode.postMessage({type: 'onInfo', value: 'Fix command copied!'});
+            });
+        }
+
+        function renderReport(report, adviceText = null) {
             const dashArray = ((report.score / 100) * 100) + ", 100";
             const circleClass = report.score >= 80 ? 'good' : report.score >= 50 ? 'warning' : 'critical';
 
@@ -186,8 +243,12 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
                 '</svg></div>' +
                 '<div class="button-group">' +
                 '<button class="action-button primary" onclick="vscode.postMessage({type: \\'scan\\'})">Rescan</button>' +
-                '<button class="action-button" onclick="vscode.postMessage({type: \\'onInfo\\', value: \\'AI Advisor coming soon...\\'})">Ask AI</button>' +
+                '<button class="action-button" onclick="vscode.postMessage({type: \\'onAdvice\\'})">Ask AI</button>' +
                 '</div>';
+
+            if (adviceText) {
+                html += '<div class="advice-box"><strong>Architectural Advice</strong><br><br>' + adviceText.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
+            }
 
             const sections = [
                 { title: 'Runtimes & Tooling', items: report.checks.filter(c => ['runtime', 'package_manager', 'tool'].includes(c.category)) },
@@ -199,14 +260,29 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
                 if (sec.items.length === 0) return;
                 html += '<div><h3>' + sec.title + '</h3>';
                 sec.items.forEach(c => {
-                    const reqStr = c.required ? ' · Req: ' + c.required : '';
+                    const reqStr = c.required ? ' &middot; Req: ' + c.required : '';
                     const foundStr = c.found ? 'Found ' + c.found : 'Missing';
                     html += '<div class="check-item">' +
                         '<div class="icon-container">' + getIcon(c.passed, c.severity) + '</div>' +
                         '<div class="check-details">' +
                         '<span class="check-name">' + c.name + '</span>' +
-                        '<span class="check-found">' + foundStr + reqStr + '</span>' +
-                        '</div></div>';
+                        '<span class="check-found">' + foundStr + reqStr + '</span>';
+                    
+                    if (!c.passed && c.fixCommand) {
+                        const escapedCmd = c.fixCommand.replace(/'/g, "\\\\'");
+                        html += '<div class="ai-fix">' +
+                                '<div class="ai-fix-title">✨ AI Fix Recommendation</div>' +
+                                '<div>' + (c.explanation || '') + '</div>' +
+                                '<div class="ai-fix-command">' +
+                                '<code>' + c.fixCommand + '</code>' +
+                                '<button class="copy-btn" onclick="copyToClipboard(\\\'' + escapedCmd + '\\\')">Copy</button>' +
+                                '</div>' +
+                                '</div>';
+                    } else if (!c.passed && c.explanation) {
+                        html += '<div class="ai-fix"><div class="ai-fix-title">✨ AI Note</div><div>' + c.explanation + '</div></div>';
+                    }
+
+                    html += '</div></div>';
                 });
                 html += '</div>';
             });

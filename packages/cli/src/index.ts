@@ -18,8 +18,8 @@ import { HealthReport } from '@devpulse/shared';
 const CONFIG_DIR = path.join(os.homedir(), '.devpulse');
 const CONFIG_ENV_PATH = path.join(CONFIG_DIR, '.env');
 
-dotenv.config({ path: CONFIG_ENV_PATH });
-dotenv.config();
+dotenv.config({ path: CONFIG_ENV_PATH, quiet: true } as any);
+dotenv.config({ quiet: true } as any);
 
 const program = new Command();
 
@@ -149,6 +149,7 @@ program.command('fix')
 
 program.command('advice')
   .description('Get AI-driven technical advice for your setup')
+  .option('--raw', 'Output raw markdown without UI rendering')
   .action(runAdvice);
 
 program.command('auth')
@@ -210,10 +211,15 @@ async function runFix() {
   await runAgentFixer(failures);
 }
 
-async function runAdvice() {
-  intro(chalk.bgCyan.black(' DevPulse Architecture Advice '));
-  const s = spinner();
-  s.start('Consulting Groq AI with environment context...');
+async function runAdvice(options: any = {}) {
+  const isRaw = options.raw;
+  let s: any = null;
+
+  if (!isRaw) {
+    intro(chalk.bgCyan.black(' DevPulse Architecture Advice '));
+    s = spinner();
+    s.start('Consulting Groq AI with environment context...');
+  }
 
   try {
     const context = await buildScanContext(process.cwd());
@@ -221,6 +227,12 @@ async function runAdvice() {
     const advice = adviceRaw?.trim()
       ? adviceRaw
       : 'No advice was returned by AI for this run. Please try again.';
+      
+    if (isRaw) {
+      console.log(advice);
+      return;
+    }
+
     s.stop('Advice report generated.');
 
     const divider = '─'.repeat(82);
@@ -255,7 +267,11 @@ async function runAdvice() {
 
     outro(chalk.bold.bgGreen.black(' ARCHITECTURAL REVIEW COMPLETE '));
   } catch (err: any) {
-    s.stop(chalk.red('Failed to generate advice.'));
+    if (isRaw) {
+      console.error(err.message);
+      return;
+    }
+    s?.stop(chalk.red('Failed to generate advice.'));
     log.error(err.message);
   }
 }
