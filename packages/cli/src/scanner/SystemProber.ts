@@ -2,6 +2,7 @@ import { execa } from 'execa';
 import which from 'which';
 import os from 'os';
 import fs from 'fs';
+import path from 'path';
 
 export type Platform = 'mac' | 'linux' | 'windows' | 'wsl';
 
@@ -35,6 +36,8 @@ export async function probeSystem(projectPath: string): Promise<ProbeResult[]> {
     probeGo(platform),
     probeRuby(),
     probeEnvVars(projectPath),
+    probeNodeModules(projectPath),
+    probePipPackages(platform),
   ];
 
   const results = await Promise.allSettled(probes);
@@ -306,4 +309,79 @@ async function probeEnvVars(projectPath: string): Promise<ProbeResult[]> {
     path: null,
     managedBy: null,
   }];
+}
+
+async function probeNodeModules(projectPath: string): Promise<ProbeResult[]> {
+  const results: ProbeResult[] = [];
+  try {
+    const pkgStr = await fs.promises.readFile(path.join(projectPath, 'package.json'), 'utf8');
+    const pkg = JSON.parse(pkgStr);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    
+    for (const dep of Object.keys(deps)) {
+      const depPath = path.join(projectPath, 'node_modules', dep, 'package.json');
+      try {
+        const depPkgStr = await fs.promises.readFile(depPath, 'utf8');
+        const depPkg = JSON.parse(depPkgStr);
+        results.push({
+          tool: `npm_pkg:${dep}`,
+          found: depPkg.version,
+          raw: null,
+          path: depPath,
+          managedBy: 'npm'
+        });
+      } catch {
+        results.push({
+          tool: `npm_pkg:${dep}`,
+          found: null,
+          raw: null,
+          path: null,
+          managedBy: 'npm',
+          reason: `Dependency ${dep} is missing from node_modules`
+        });
+      }
+    }
+  } catch (e) {
+    // No package.json or invalid json
+  }
+  return results;
+}
+
+async function probePipPackages(platform: Platform): Promise<ProbeResult[]> {
+  const commands = platform === 'windows' ? ['python', 'python3'] : ['python3', 'python'];
+  let pipListOutput = '';
+  let usedCmd = '';
+
+  for (const cmd of commands) {
+    const result = await run(cmd, ['-m', 'pip', 'list', '--format=json', '--disable-pip-version-check']);
+    if (result && result.stdout) {
+      const startIdx = result.stdout.indexOf('[');
+      if (startIdx !== -1) {
+        usedCmd = cmd;
+        pipListOutput = result.stdout.substring(startIdx);
+        break;
+      }
+    }
+  }
+
+  if (!pipListOutput) return [];
+  
+  const results: ProbeResult[] = [];
+  try {
+    const packages = JSON.parse(pipListOutput);
+    for (const pkg of packages) {
+      if (pkg.name && pkg.version) {
+        results.push({
+          tool: `pip_pkg:${pkg.name.toLowerCase()}`,
+          found: pkg.version,
+          raw: null,
+          path: null,
+          managedBy: `pip (${usedCmd})`
+        });
+      }
+    }
+  } catch (e) {
+    // Parsing error ignored
+  }
+  return results;
 }
