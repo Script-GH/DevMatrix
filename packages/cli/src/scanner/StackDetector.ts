@@ -9,71 +9,109 @@ export interface StackRequirement {
   rangeType: 'exact' | 'semver-range' | 'min' | 'unknown';
 }
 
+// ─── Caches ─────────────────────────────────────────────────────────
+const fileCache = new Map<string, string>();
+
+async function cachedReadFile(filePath: string): Promise<string> {
+    if (fileCache.has(filePath)) return fileCache.get(filePath)!;
+    const content = await fs.readFile(filePath, 'utf8');
+    fileCache.set(filePath, content);
+    return content;
+}
+
 export async function detectStack(projectPath: string): Promise<StackRequirement[]> {
   const requirements: StackRequirement[] = [];
-  const readers = [
-    readToolVersions,
-    readNvmrc,
-    readPackageJson,
-    readPyprojectToml,
-    readGoMod,
-    readDockerfile,
-    readEnvExample,
-  ];
+  
+  // 1. Discovery phase: Find all relevant directories
+  const pathsToScan = [projectPath];
+  const dirEntries = new Map<string, string[]>();
 
-  // Run all readers in parallel — they're all just file reads
-  const results = await Promise.allSettled(
-    readers.map(r => r(projectPath))
-  );
+  try {
+    const rootEntries = await fs.readdir(projectPath, { withFileTypes: true });
+    dirEntries.set(projectPath, rootEntries.map(e => e.name));
+
+    const subdirs = rootEntries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules')
+      .map(e => path.join(projectPath, e.name));
+    
+    pathsToScan.push(...subdirs);
+
+    // Populate dirEntries for subdirs
+    await Promise.all(subdirs.map(async (sd) => {
+        try {
+            const entries = await fs.readdir(sd);
+            dirEntries.set(sd, entries);
+        } catch {
+            dirEntries.set(sd, []);
+        }
+    }));
+  } catch (e) {
+    dirEntries.set(projectPath, []);
+  }
+
+  // 2. Intelligent scan: Only run readers if their trigger files exist
+  const tasks: Promise<StackRequirement[]>[] = [];
+
+  for (const dir of pathsToScan) {
+    const files = dirEntries.get(dir) || [];
+    
+    if (files.includes('.tool-versions')) tasks.push(readToolVersions(dir));
+    if (files.includes('.nvmrc')) tasks.push(readNvmrc(dir));
+    if (files.includes('package.json')) tasks.push(readPackageJson(dir));
+    if (files.includes('pyproject.toml')) tasks.push(readPyprojectToml(dir));
+    if (files.includes('go.mod')) tasks.push(readGoMod(dir));
+    if (files.includes('Dockerfile')) tasks.push(readDockerfile(dir));
+    if (files.includes('.env.example') || files.includes('.env.template')) tasks.push(readEnvExample(dir));
+    
+    tasks.push(readToolHeuristics(dir, files));
+  }
+
+  const results = await Promise.allSettled(tasks);
 
   for (const result of results) {
     if (result.status === 'fulfilled' && result.value.length > 0) {
       requirements.push(...result.value);
     }
-    // silently skip files that don't exist (rejected = file not found)
   }
 
-  return deduplicateAndPrioritize(requirements);
+  return deduplicateAndPrioritize(requirements, projectPath);
 }
 
 // ─── Individual readers ───────────────────────────────────────────────
 
 async function readNvmrc(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, '.nvmrc'), 'utf8');
+  const content = await cachedReadFile(path.join(root, '.nvmrc'));
   const raw = content.trim();
-  // Resolve LTS aliases: "lts/iron" → "20", "lts/*" → "latest LTS"
   const version = resolveLtsAlias(raw) ?? normalizeVersion(raw);
-  return [{ tool: 'node', required: version, source: '.nvmrc', rangeType: 'exact' }];
+  return [{ tool: 'node', required: version, source: formatSource(root, '.nvmrc'), rangeType: 'exact' }];
 }
 
 async function readPackageJson(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, 'package.json'), 'utf8');
+  const content = await cachedReadFile(path.join(root, 'package.json'));
   const pkg = JSON.parse(content);
   const reqs: StackRequirement[] = [];
 
-  if (pkg.engines?.node) {
-    reqs.push({
-      tool: 'node',
-      required: pkg.engines.node,
-      source: 'package.json#engines.node',
-      rangeType: 'semver-range'
-    });
-  }
+  reqs.push({
+    tool: 'node',
+    required: pkg.engines?.node ?? null,
+    source: formatSource(root, 'package.json'),
+    rangeType: pkg.engines?.node ? 'semver-range' : 'unknown'
+  });
+
   if (pkg.engines?.npm) {
     reqs.push({
       tool: 'npm',
       required: pkg.engines.npm,
-      source: 'package.json#engines.npm',
+      source: formatSource(root, 'package.json#engines.npm'),
       rangeType: 'semver-range'
     });
   }
   if (pkg.packageManager) {
-    // "pnpm@8.15.0" → { tool: "pnpm", required: "8.15.0" }
     const [manager, version] = pkg.packageManager.split('@');
     reqs.push({
       tool: manager,
       required: version ?? null,
-      source: 'package.json#packageManager',
+      source: formatSource(root, 'package.json#packageManager'),
       rangeType: version ? 'exact' : 'unknown'
     });
   }
@@ -81,47 +119,41 @@ async function readPackageJson(root: string): Promise<StackRequirement[]> {
 }
 
 async function readToolVersions(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, '.tool-versions'), 'utf8');
+  const content = await cachedReadFile(path.join(root, '.tool-versions'));
   return content
     .split('\n')
     .filter(line => line.trim() && !line.startsWith('#'))
     .map(line => {
       const [tool, version] = line.trim().split(/\s+/);
-      // asdf uses "nodejs" not "node" — normalize
       const normalizedTool = tool === 'nodejs' ? 'node' : tool;
       return {
         tool: normalizedTool,
         required: version ?? null,
-        source: '.tool-versions',
+        source: formatSource(root, '.tool-versions'),
         rangeType: 'exact' as const
       };
     });
 }
 
 async function readPyprojectToml(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, 'pyproject.toml'), 'utf8');
+  const content = await cachedReadFile(path.join(root, 'pyproject.toml'));
   const parsed = parseToml(content) as any;
   const reqs: StackRequirement[] = [];
 
-  // PEP 621 format
-  const requiresPython = parsed?.project?.['requires-python'];
+  const requiresPython = parsed?.project?.['requires-python'] || parsed?.tool?.poetry?.dependencies?.python;
   if (requiresPython) {
     reqs.push({
       tool: 'python',
       required: requiresPython,
-      source: 'pyproject.toml#project.requires-python',
+      source: formatSource(root, 'pyproject.toml'),
       rangeType: 'semver-range'
     });
-  }
-
-  // Poetry format
-  const poetryPython = parsed?.tool?.poetry?.dependencies?.python;
-  if (poetryPython) {
+  } else {
     reqs.push({
       tool: 'python',
-      required: poetryPython,
-      source: 'pyproject.toml#tool.poetry.dependencies.python',
-      rangeType: 'semver-range'
+      required: null,
+      source: formatSource(root, 'pyproject.toml'),
+      rangeType: 'unknown'
     });
   }
 
@@ -129,12 +161,13 @@ async function readPyprojectToml(root: string): Promise<StackRequirement[]> {
 }
 
 async function readEnvExample(root: string): Promise<StackRequirement[]> {
-  // Try both common filenames
   let content: string;
+  let sourceFile = '.env.example';
   try {
-    content = await fs.readFile(path.join(root, '.env.example'), 'utf8');
+    content = await cachedReadFile(path.join(root, '.env.example'));
   } catch {
-    content = await fs.readFile(path.join(root, '.env.template'), 'utf8');
+    content = await cachedReadFile(path.join(root, '.env.template'));
+    sourceFile = '.env.template';
   }
 
   return content
@@ -142,40 +175,62 @@ async function readEnvExample(root: string): Promise<StackRequirement[]> {
     .filter(line => line.trim() && !line.startsWith('#'))
     .map(line => {
       const key = line.split('=')[0].trim();
+      if (!key) return null!;
       return {
         tool: 'env',
-        required: key,   // the KEY name is the "requirement"
-        source: '.env.example',
+        required: key,
+        source: formatSource(root, sourceFile),
         rangeType: 'exact' as const
       };
-    });
+    }).filter(Boolean);
 }
 
 async function readGoMod(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, 'go.mod'), 'utf8');
+  const content = await cachedReadFile(path.join(root, 'go.mod'));
   const match = content.match(/^go\s+([\d.]+)/m);
-  if (!match) return [];
-  return [{ tool: 'go', required: match[1], source: 'go.mod', rangeType: 'min' }];
+  return [{ 
+    tool: 'go', 
+    required: match ? match[1] : null, 
+    source: formatSource(root, 'go.mod'), 
+    rangeType: match ? 'min' : 'unknown' 
+  }];
 }
 
 async function readDockerfile(root: string): Promise<StackRequirement[]> {
-  const content = await fs.readFile(path.join(root, 'Dockerfile'), 'utf8');
+  const content = await cachedReadFile(path.join(root, 'Dockerfile'));
   const match = content.match(/^FROM\s+(\S+)/mi);
   if (!match) return [];
-  // "node:20-alpine" → tool: node, version: 20
   const image = match[1];
   const [imageName, tag] = image.split(':');
   if (!tag) return [];
-  const toolMap: Record<string, string> = {
-    node: 'node', python: 'python', golang: 'go', ruby: 'ruby'
-  };
+  const toolMap: Record<string, string> = { node: 'node', python: 'python', golang: 'go', ruby: 'ruby' };
   const tool = toolMap[imageName];
   if (!tool) return [];
-  const version = tag.split('-')[0]; // strip "-alpine", "-slim" etc.
-  return [{ tool, required: version, source: 'Dockerfile', rangeType: 'min' }];
+  const version = tag.split('-')[0];
+  return [{ tool, required: version, source: formatSource(root, 'Dockerfile'), rangeType: 'min' }];
 }
 
-// ─── Deduplication ────────────────────────────────────────────────────
+async function readToolHeuristics(root: string, files: string[]): Promise<StackRequirement[]> {
+  const reqs: StackRequirement[] = [];
+  if (files.includes('requirements.txt') || files.includes('Pipfile')) {
+    reqs.push({ tool: 'python', required: null, source: formatSource(root, 'python-heuristic'), rangeType: 'unknown' });
+  }
+  if (files.includes('Gemfile')) {
+    reqs.push({ tool: 'ruby', required: null, source: formatSource(root, 'Gemfile'), rangeType: 'unknown' });
+  }
+  if (files.includes('docker-compose.yml') || files.includes('docker-compose.yaml')) {
+    reqs.push({ tool: 'docker', required: null, source: formatSource(root, 'docker-compose'), rangeType: 'unknown' });
+  }
+  return reqs;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+function formatSource(root: string, file: string): string {
+    const parts = root.split(path.sep);
+    const lastDir = parts[parts.length - 1];
+    return lastDir && lastDir !== '.' ? `${lastDir}/${file}` : file;
+}
 
 const PRIORITY: Record<string, number> = {
   '.tool-versions': 1,
@@ -184,12 +239,10 @@ const PRIORITY: Record<string, number> = {
   '.python-version': 2,
   'go.mod': 2,
   'package.json#engines.node': 3,
-  'pyproject.toml#project.requires-python': 3,
-  'pyproject.toml#tool.poetry.dependencies.python': 3,
   'Dockerfile': 4,
 };
 
-function deduplicateAndPrioritize(reqs: StackRequirement[]): StackRequirement[] {
+function deduplicateAndPrioritize(reqs: StackRequirement[], projectPath: string): StackRequirement[] {
   const byTool = new Map<string, StackRequirement[]>();
 
   for (const req of reqs) {
@@ -198,25 +251,36 @@ function deduplicateAndPrioritize(reqs: StackRequirement[]): StackRequirement[] 
   }
 
   const result: StackRequirement[] = [];
-  for (const [, toolReqs] of byTool) {
+  for (const [tool, toolReqs] of byTool) {
+    if (tool === 'env') {
+        const seenKeys = new Set();
+        for (const req of toolReqs) {
+            if (!seenKeys.has(req.required)) {
+                result.push(req);
+                seenKeys.add(req.required);
+            }
+        }
+        continue;
+    }
+
     if (toolReqs.length === 1) {
       result.push(toolReqs[0]);
       continue;
     }
-    // Sort by priority, keep highest priority as the canonical requirement
-    // Flag conflicts if versions disagree significantly
-    toolReqs.sort((a, b) =>
-      (PRIORITY[a.source] ?? 99) - (PRIORITY[b.source] ?? 99)
-    );
+
+    toolReqs.sort((a, b) => {
+      const pA = Object.entries(PRIORITY).find(([key]) => a.source.includes(key))?.[1] ?? 99;
+      const pB = Object.entries(PRIORITY).find(([key]) => b.source.includes(key))?.[1] ?? 99;
+      return pA - pB;
+    });
+
     result.push(toolReqs[0]);
 
-    // Detect conflicts — e.g. .nvmrc says 18, package.json says >=20
     const canonical = toolReqs[0].required;
     for (const other of toolReqs.slice(1)) {
-      if (other.required && !versionsCompatible(canonical, other.required)) {
-        // Emit a conflict requirement — the AI layer will explain it
+      if (other.required && canonical && !versionsCompatible(canonical, other.required)) {
         result.push({
-          tool: `${toolReqs[0].tool}:conflict`,
+          tool: `${tool}:conflict`,
           required: `${canonical} (${toolReqs[0].source}) vs ${other.required} (${other.source})`,
           source: 'conflict-detector',
           rangeType: 'unknown'
@@ -228,18 +292,11 @@ function deduplicateAndPrioritize(reqs: StackRequirement[]): StackRequirement[] 
   return result;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-
 function normalizeVersion(v: string): string {
   return v.replace(/^v/, '').trim();
 }
 
-const LTS_MAP: Record<string, string> = {
-  'lts/iron': '20',
-  'lts/hydrogen': '18',
-  'lts/gallium': '16',
-  'lts/*': '20',  // assume current LTS
-};
+const LTS_MAP: Record<string, string> = { 'lts/iron': '20', 'lts/hydrogen': '18', 'lts/gallium': '16', 'lts/*': '20' };
 
 function resolveLtsAlias(v: string): string | null {
   return LTS_MAP[v.toLowerCase()] ?? null;
@@ -247,8 +304,7 @@ function resolveLtsAlias(v: string): string | null {
 
 function versionsCompatible(a: string | null, b: string | null): boolean {
   if (!a || !b) return true;
-  // Simple major-version check for conflict detection
   const majorA = parseInt(a.replace(/[^\d]/, ''));
   const majorB = parseInt(b.replace(/[^\d]/, ''));
-  return majorA === majorB;
+  return isNaN(majorA) || isNaN(majorB) || majorA === majorB;
 }
