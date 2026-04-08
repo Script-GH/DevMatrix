@@ -63,8 +63,9 @@ export async function detectStack(projectPath: string): Promise<StackRequirement
     if (files.includes('Dockerfile')) tasks.push(readDockerfile(dir));
     if (files.includes('.env.example') || files.includes('.env.template')) tasks.push(readEnvExample(dir));
     if (files.includes('requirements.txt')) tasks.push(readRequirementsTxt(dir));
+    if (files.some(f => f.endsWith('.java') || f === 'pom.xml' || f.startsWith('build.gradle'))) tasks.push(readJava(dir));
     
-    tasks.push(readToolHeuristics(dir, files));
+    tasks.push(readExtendedHeuristics(dir, files));
   }
 
   const results = await Promise.allSettled(tasks);
@@ -280,20 +281,6 @@ async function readDockerfile(root: string): Promise<StackRequirement[]> {
   if (!tool) return [];
   const version = tag.split('-')[0];
   return [{ tool, required: version, source: formatSource(root, 'Dockerfile'), rangeType: 'min' }];
-}
-
-async function readToolHeuristics(root: string, files: string[]): Promise<StackRequirement[]> {
-  const reqs: StackRequirement[] = [];
-  if (files.includes('requirements.txt') || files.includes('Pipfile')) {
-    reqs.push({ tool: 'python', required: null, source: formatSource(root, 'python-heuristic'), rangeType: 'unknown' });
-  }
-  if (files.includes('Gemfile')) {
-    reqs.push({ tool: 'ruby', required: null, source: formatSource(root, 'Gemfile'), rangeType: 'unknown' });
-  }
-  if (files.includes('docker-compose.yml') || files.includes('docker-compose.yaml')) {
-    reqs.push({ tool: 'docker', required: null, source: formatSource(root, 'docker-compose'), rangeType: 'unknown' });
-  }
-  return reqs;
 }
 
 async function readExtendedHeuristics(root: string, files: string[]): Promise<StackRequirement[]> {
