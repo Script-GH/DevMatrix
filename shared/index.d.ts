@@ -14,6 +14,7 @@ export interface CheckResult {
   explanation?: string;    // filled by AI
   reasoning?: string;      // filled by AI: detailed technical logic
   fixCommand?: string;     // filled by AI
+  manualSteps?: string;    // filled by AI: numbered steps if auto-fix may fail or needs human action
   risk?: RiskLevel;        // filled by AI
 }
 

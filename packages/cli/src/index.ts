@@ -73,6 +73,7 @@ function mergeAIFixesIntoChecks(checks: HealthReport['checks'], aiFixes: Partial
     target.explanation = fix.explanation;
     target.reasoning = fix.reasoning;
     target.fixCommand = fix.fixCommand;
+    target.manualSteps = fix.manualSteps;
     target.risk = fix.risk;
   }
 }
