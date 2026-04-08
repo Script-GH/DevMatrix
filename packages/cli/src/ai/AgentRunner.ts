@@ -3,6 +3,9 @@ import { execa } from 'execa';
 import { CheckResult } from '@devpulse/shared';
 import { getRemedyForError } from './AIAdvisor.js';
 import chalk from 'chalk';
+import fs from 'fs';
+import { createInterface } from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 type FixOutcome = 'fixed' | 'skipped' | 'failed';
 
@@ -14,15 +17,65 @@ type FixStats = {
 
 const MAX_ATTEMPTS = 3;
 
-async function askToExecute(issue: CheckResult, command: string): Promise<'execute' | 'skip' | 'cancel'> {
+type ReviewDecision = 'approve' | 'reject';
+
+function normalizeStdinForPrompts() {
+    try {
+        if (input.isTTY) {
+            input.setRawMode?.(false);
+            input.resume();
+        }
+    } catch {
+        // Best effort.
+    }
+}
+
+async function readLine(message: string): Promise<string | null> {
+    normalizeStdinForPrompts();
+
+    // Use /dev/tty so prompts still work even if stdin gets detached after Ink exits.
+    const ttyInput = fs.existsSync('/dev/tty') ? fs.createReadStream('/dev/tty') : input;
+    const ttyOutput = fs.existsSync('/dev/tty') ? fs.createWriteStream('/dev/tty') : output;
+    const rl = createInterface({ input: ttyInput, output: ttyOutput });
+    try {
+        const answer = await rl.question(message);
+        return answer.trim();
+    } catch {
+        return null;
+    } finally {
+        rl.close();
+        if (ttyInput !== input) ttyInput.destroy();
+        if (ttyOutput !== output) ttyOutput.end();
+    }
+}
+
+async function reviewCommand(command: string): Promise<{ decision: ReviewDecision; command: string }> {
+    log.message(chalk.dim('Review command before execution:'));
+    log.message(chalk.yellow(`  ${command}`));
+    log.message(chalk.dim('[a] Approve  [r] Reject'));
+
+    const choice = (await readLine('Choice (a/r): '))?.toLowerCase();
+    if (!choice || choice === 'r' || choice === 'reject') return { decision: 'reject', command };
+
+    return { decision: 'approve', command };
+}
+
+async function askToExecute(issue: CheckResult, command: string): Promise<{ action: 'execute' | 'skip' | 'cancel'; command: string }> {
     log.message(chalk.yellow(`Proposed Command: ${command}`));
-    log.message(chalk.dim(`Auto mode: executing fix for ${issue.id}.`));
-    return 'execute';
+    const review = await reviewCommand(command);
+
+    if (review.decision === 'reject') {
+        log.warn(`Rejected fix command for ${issue.id}.`);
+        return { action: 'skip', command };
+    }
+
+    return { action: 'execute', command: review.command };
 }
 
 async function askToRetry(): Promise<boolean> {
-    log.message(chalk.dim('Auto mode: retrying with AI analysis.'));
-    return true;
+    const answer = (await readLine('Command failed. Retry with AI analysis? [Y/n]: '))?.toLowerCase();
+    if (!answer) return true;
+    return answer !== 'n' && answer !== 'no';
 }
 
 async function executeCommand(command: string, issueId: string): Promise<{ ok: boolean; errorOutput?: string }> {
@@ -56,13 +109,14 @@ async function processIssue(issue: CheckResult): Promise<FixOutcome> {
             return 'failed';
         }
 
-        const executeChoice = await askToExecute(issue, currentCommand);
-        if (executeChoice === 'cancel') return 'skipped';
-        if (executeChoice === 'skip') {
+        const review = await askToExecute(issue, currentCommand);
+        if (review.action === 'cancel') return 'skipped';
+        if (review.action === 'skip') {
             log.warn(`Skipped fixing ${issue.id}.`);
             return 'skipped';
         }
 
+        currentCommand = review.command;
         const result = await executeCommand(currentCommand, issue.id);
         if (result.ok) return 'fixed';
 
