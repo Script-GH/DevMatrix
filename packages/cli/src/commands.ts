@@ -505,6 +505,13 @@ export async function cmdLogsPush(): Promise<void> {
       ? diffSummary(diff, devName)
       : `[${devName}] No version changes`;
 
+    if (!hasChanges) {
+      // 2. Update developer doc (Heartbeat/Presence)
+      await upsertDeveloper(projectId, devId, { name: devName, dependencies: currentDeps, env, user_id: config.userId });
+      s.stop(chalk.dim('No version changes detected. Local environment is aligned.'));
+      return;
+    }
+
     // 1. Push version timeline snapshot
     await pushVersionSnapshot(projectId, devId, {
       dependencies: currentDeps,
@@ -524,26 +531,20 @@ export async function cmdLogsPush(): Promise<void> {
     });
 
     // 4. Notify team if there were actual changes
-    if (hasChanges) {
-      await createNotification(projectId, {
-        message,
-        changes: diff,
-        triggeredBy: devId,
-      });
-    }
+    await createNotification(projectId, {
+      message,
+      changes: diff,
+      triggeredBy: devId,
+    });
 
     s.stop(chalk.green('Version snapshot pushed.'));
 
-    if (hasChanges) {
-      console.log('');
-      log.info(chalk.bold('Changes recorded in this snapshot:'));
-      printDiff(diff);
-    } else {
-      log.info(chalk.dim('No version changes since last push — snapshot recorded as-is.'));
-    }
+    console.log('');
+    log.info(chalk.bold('Changes recorded in this snapshot:'));
+    printDiff(diff);
 
     log.success(
-      `Timeline updated in Firestore. ${chalk.dim(`Project: ${projectId}`)}`
+      `Timeline updated in Supabase. ${chalk.dim(`Project: ${projectId}`)}`
     );
   } catch (err: any) {
     log.error(err.message);
