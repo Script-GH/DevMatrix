@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { exec } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
 
 export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
   _view?: vscode.WebviewView;
@@ -25,6 +26,9 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
         case 'onInfo':
           vscode.window.showInformationMessage(data.value);
           break;
+        case 'openSettings':
+          vscode.commands.executeCommand('workbench.action.openSettings', 'devpulse.cliPath');
+          break;
       }
     });
     
@@ -34,6 +38,29 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
             this.triggerScan();
         }
     }, 1000);
+  }
+
+  private resolveCliPath(): string | undefined {
+    // 1. Check user setting
+    const config = vscode.workspace.getConfiguration('devpulse');
+    const manualPath = config.get<string>('cliPath');
+    if (manualPath && fs.existsSync(manualPath)) {
+        return manualPath;
+    }
+
+    // 2. Check development monorepo path
+    const devPath = path.join(this._extensionUri.fsPath, '..', 'cli', 'dist', 'index.js');
+    if (fs.existsSync(devPath)) {
+        return devPath;
+    }
+
+    // 3. Check bundled path (hypothetical structure for published extension)
+    const bundledPath = path.join(this._extensionUri.fsPath, 'dist', 'cli', 'index.js');
+    if (fs.existsSync(bundledPath)) {
+        return bundledPath;
+    }
+
+    return undefined;
   }
 
   public triggerScan() {
@@ -47,9 +74,15 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
     const rootPath = workspaceFolders[0].uri.fsPath;
     this._view.webview.postMessage({ type: 'scanStarted' });
 
-    // Assuming the monorepo structure where cli is built in packages/cli/dist
-    const cliEntry = path.join(rootPath, 'packages', 'cli', 'dist', 'index.js');
+    const cliEntry = this.resolveCliPath();
     
+    if (!cliEntry) {
+        const errorMsg = `DevPulse CLI not found. Please ensure it's built or set the path in settings.`;
+        vscode.window.showErrorMessage('DevPulse: CLI module missing.');
+        this._view?.webview.postMessage({ type: 'scanError', error: errorMsg, showSettings: true });
+        return;
+    }
+
     // Try both node paths (windows / linux)
     exec(`node "${cliEntry}" scan --json`, { cwd: rootPath }, (error, stdout, stderr) => {
         if (error) {
@@ -130,7 +163,11 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
             if (message.type === 'scanStarted') {
                 document.getElementById('content').innerHTML = '<div class="loader">Scanning workspace...</div>';
             } else if (message.type === 'scanError') {
-                document.getElementById('content').innerHTML = '<div style="color:var(--vscode-errorForeground)">Error during scan: ' + message.error + '</div>';
+                let html = '<div style="color:var(--vscode-errorForeground); margin-bottom: 20px;">Error: ' + message.error + '</div>';
+                if (message.showSettings) {
+                    html += '<button class="action-button primary" onclick="vscode.postMessage({type: \\'openSettings\\'})">Configure CLI Path</button>';
+                }
+                document.getElementById('content').innerHTML = html;
             } else if (message.type === 'scanComplete') {
                 renderReport(message.report);
             }

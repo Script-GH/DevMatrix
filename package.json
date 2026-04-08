@@ -14,5 +14,10 @@
   "scripts": {
     "scan": "npm --prefix packages/cli run dev -- scan",
     "dmx": "npm --prefix packages/cli run dev --"
+  },
+  "dependencies": {
+    "ansi-escape": "^1.1.0",
+    "ansi-escapes": "^7.3.0",
+    "strip-final-newline": "^4.0.0"
   }
 }

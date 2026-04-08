@@ -62,6 +62,7 @@ export async function detectStack(projectPath: string): Promise<StackRequirement
     if (files.includes('go.mod')) tasks.push(readGoMod(dir));
     if (files.includes('Dockerfile')) tasks.push(readDockerfile(dir));
     if (files.includes('.env.example') || files.includes('.env.template')) tasks.push(readEnvExample(dir));
+    if (files.includes('requirements.txt')) tasks.push(readRequirementsTxt(dir));
     
     tasks.push(readToolHeuristics(dir, files));
   }
@@ -115,6 +116,27 @@ async function readPackageJson(root: string): Promise<StackRequirement[]> {
       rangeType: version ? 'exact' : 'unknown'
     });
   }
+  if (pkg.dependencies) {
+    for (const [dep, version] of Object.entries(pkg.dependencies)) {
+      reqs.push({
+        tool: `npm_pkg:${dep}`,
+        required: version as string,
+        source: formatSource(root, 'package.json#dependencies'),
+        rangeType: 'semver-range'
+      });
+    }
+  }
+  if (pkg.devDependencies) {
+    for (const [dep, version] of Object.entries(pkg.devDependencies)) {
+      reqs.push({
+        tool: `npm_pkg:${dep}`,
+        required: version as string,
+        source: formatSource(root, 'package.json#devDependencies'),
+        rangeType: 'semver-range'
+      });
+    }
+  }
+
   return reqs;
 }
 
@@ -157,6 +179,56 @@ async function readPyprojectToml(root: string): Promise<StackRequirement[]> {
     });
   }
 
+  const poetryDeps = parsed?.tool?.poetry?.dependencies;
+  if (poetryDeps) {
+      for (const [dep, version] of Object.entries(poetryDeps)) {
+          if (dep.toLowerCase() === 'python') continue;
+          reqs.push({
+              tool: `pip_pkg:${dep.toLowerCase()}`,
+              required: typeof version === 'string' ? version : (version as any).version || '*',
+              source: formatSource(root, 'pyproject.toml#poetry'),
+              rangeType: 'semver-range'
+          });
+      }
+  }
+
+  const projectDeps = parsed?.project?.dependencies;
+  if (Array.isArray(projectDeps)) {
+      for (const depStr of projectDeps) {
+          const match = depStr.match(/^([a-zA-Z0-9_-]+)(.*?)$/);
+          if (match) {
+              const dep = match[1].toLowerCase();
+              const version = match[2].trim() || '*';
+              reqs.push({
+                  tool: `pip_pkg:${dep}`,
+                  required: version,
+                  source: formatSource(root, 'pyproject.toml'),
+                  rangeType: 'semver-range'
+              });
+          }
+      }
+  }
+
+  return reqs;
+}
+
+async function readRequirementsTxt(root: string): Promise<StackRequirement[]> {
+  const content = await cachedReadFile(path.join(root, 'requirements.txt'));
+  const reqs: StackRequirement[] = [];
+  
+  for (const line of content.split('\n')) {
+    const clean = line.split('#')[0].trim();
+    if (!clean) continue;
+    const match = clean.match(/^([a-zA-Z0-9_-]+)(.*)$/);
+    if (match) {
+        reqs.push({
+            tool: `pip_pkg:${match[1].toLowerCase()}`,
+            required: match[2].trim() || '*',
+            source: formatSource(root, 'requirements.txt'),
+            rangeType: 'semver-range'
+        });
+    }
+  }
   return reqs;
 }
 
@@ -221,6 +293,75 @@ async function readToolHeuristics(root: string, files: string[]): Promise<StackR
   if (files.includes('docker-compose.yml') || files.includes('docker-compose.yaml')) {
     reqs.push({ tool: 'docker', required: null, source: formatSource(root, 'docker-compose'), rangeType: 'unknown' });
   }
+  return reqs;
+}
+
+async function readExtendedHeuristics(root: string, files: string[]): Promise<StackRequirement[]> {
+  const reqs: StackRequirement[] = [];
+  
+  // Base heuristics
+  if (files.includes('requirements.txt') || files.includes('Pipfile')) {
+    reqs.push({ tool: 'python', required: null, source: formatSource(root, 'python-heuristic'), rangeType: 'unknown' });
+  }
+  if (files.includes('Gemfile')) {
+    reqs.push({ tool: 'ruby', required: null, source: formatSource(root, 'Gemfile'), rangeType: 'unknown' });
+  }
+  if (files.includes('docker-compose.yml') || files.includes('docker-compose.yaml')) {
+    reqs.push({ tool: 'docker', required: null, source: formatSource(root, 'docker-compose'), rangeType: 'unknown' });
+  }
+
+  // Rust
+  if (files.includes('Cargo.toml')) {
+    reqs.push({ tool: 'rust', required: null, source: formatSource(root, 'Cargo.toml'), rangeType: 'unknown' });
+    reqs.push({ tool: 'cargo', required: null, source: formatSource(root, 'Cargo.toml'), rangeType: 'unknown' });
+  }
+
+  // PHP
+  if (files.includes('composer.json')) {
+    reqs.push({ tool: 'php', required: null, source: formatSource(root, 'composer.json'), rangeType: 'unknown' });
+    reqs.push({ tool: 'composer', required: null, source: formatSource(root, 'composer.json'), rangeType: 'unknown' });
+  }
+
+  // Elixir
+  if (files.includes('mix.exs')) {
+    reqs.push({ tool: 'elixir', required: null, source: formatSource(root, 'mix.exs'), rangeType: 'unknown' });
+    reqs.push({ tool: 'mix', required: null, source: formatSource(root, 'mix.exs'), rangeType: 'unknown' });
+  }
+
+  // Flutter / Dart
+  if (files.includes('pubspec.yaml')) {
+    reqs.push({ tool: 'dart', required: null, source: formatSource(root, 'pubspec.yaml'), rangeType: 'unknown' });
+    reqs.push({ tool: 'flutter', required: null, source: formatSource(root, 'pubspec.yaml'), rangeType: 'unknown' });
+  }
+
+  // C++ / Make
+  if (files.includes('CMakeLists.txt')) {
+    reqs.push({ tool: 'cmake', required: null, source: formatSource(root, 'CMakeLists.txt'), rangeType: 'unknown' });
+  }
+  if (files.includes('Makefile')) {
+    reqs.push({ tool: 'make', required: null, source: formatSource(root, 'Makefile'), rangeType: 'unknown' });
+  }
+
+  // .NET / C#
+  if (files.includes('global.json') || files.some(f => f.endsWith('.csproj') || f.endsWith('.fsproj') || f.endsWith('.sln'))) {
+    reqs.push({ tool: 'dotnet', required: null, source: formatSource(root, 'dotnet-heuristic'), rangeType: 'unknown' });
+  }
+
+  return reqs;
+}
+
+async function readJava(root: string): Promise<StackRequirement[]> {
+  const reqs: StackRequirement[] = [];
+  reqs.push({ tool: 'java', required: null, source: formatSource(root, 'java-heuristic'), rangeType: 'unknown' });
+  try {
+    const files = await fs.readdir(root);
+    if (files.includes('build.gradle') || files.includes('build.gradle.kts')) {
+      reqs.push({ tool: 'gradle', required: null, source: formatSource(root, 'gradle-heuristic'), rangeType: 'unknown' });
+    }
+    if (files.includes('pom.xml')) {
+      reqs.push({ tool: 'maven', required: null, source: formatSource(root, 'maven-heuristic'), rangeType: 'unknown' });
+    }
+  } catch {}
   return reqs;
 }
 
