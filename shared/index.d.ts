@@ -12,6 +12,7 @@ export interface CheckResult {
   passed: boolean;
   statusLabel?: string;    // e.g. "outdated", "missing", "ok"
   explanation?: string;    // filled by AI
+  reasoning?: string;      // filled by AI: detailed technical logic
   fixCommand?: string;     // filled by AI
   risk?: RiskLevel;        // filled by AI
 }

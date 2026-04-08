@@ -1,9 +1,15 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { Command } from 'commander';
+import fs from 'fs/promises';
+import path from 'path';
+import { intro, outro, password, log } from '@clack/prompts';
+import chalk from 'chalk';
 import { probeSystem } from './scanner/SystemProber.js';
 import { detectStack } from './scanner/StackDetector.js';
 import { computeScore, evaluateEnvironment } from './engine/DiffEngine.js';
 import { getAIFixes } from './ai/AIAdvisor.js';
+import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { HealthReport } from '@devpulse/shared';
 
@@ -57,6 +63,7 @@ program.command('scan')
         const target = report.checks.find(c => c.id === fix.id);
         if (target) {
             target.explanation = fix.explanation;
+            target.reasoning = fix.reasoning;
             target.fixCommand = fix.fixCommand;
             target.risk = fix.risk;
         }
@@ -66,15 +73,91 @@ program.command('scan')
         console.log(JSON.stringify(report, null, 2));
     } else {
         ui.update({ ...report });
-        await ui.waitUntilExit();
+        
+        // Wait for either exit or fix request
+        await Promise.race([
+            ui.waitUntilExit(),
+            ui.fixRequested().then(async () => {
+                // Dashboard unmounted, now run the fixer
+                const failures = report.checks.filter(c => !c.passed);
+                await runAgentFixer(failures);
+            })
+        ]);
     }
   });
 
 program.command('fix')
-  .description('Automatically fix environment issues')
-  .action(() => {
-    console.log('dmx fix: Placeholder for automatic fixes.');
+  .description('Automatically fix environment issues using the DevPulse Agent')
+  .action(async () => {
+    const cwd = process.cwd();
+    console.log('Scanning environment...');
+    const reqs = await detectStack(cwd);
+    const probes = await probeSystem(cwd);
+    const checks = evaluateEnvironment(reqs, probes);
+    const score = computeScore(checks);
+    
+    if (score === 100) {
+        console.log('Your environment is perfectly configured! No fixes needed.');
+        return;
+    }
+    
+    console.log('Analyzing failures with Gemini AI...');
+    const aiFixes = await getAIFixes(checks);
+    for (const fix of aiFixes) {
+        const target = checks.find(c => c.id === fix.id);
+        if (target) {
+            target.explanation = fix.explanation;
+            target.reasoning = fix.reasoning;
+            target.fixCommand = fix.fixCommand;
+            target.risk = fix.risk;
+        }
+    }
+    
+    const failures = checks.filter(c => !c.passed);
+    await runAgentFixer(failures);
   });
+
+program.command('auth')
+  .description('Configure Gemini API Key persistently')
+  .action(async () => {
+    intro(chalk.bgBlue.white(' 🔑 DevPulse Authentication '));
+    
+    const apiKey = await password({
+      message: 'Enter your Gemini API Key:',
+      validate: (value) => {
+        if (!value) return 'API Key is required';
+        if (value.length < 20) return 'API Key looks too short';
+        return;
+      }
+    });
+
+    if (typeof apiKey === 'symbol' || !apiKey) {
+        outro('Authentication cancelled.');
+        return;
+    }
+
+    const envPath = path.join(process.cwd(), '.env');
+    let content = '';
+    try {
+        content = await fs.readFile(envPath, 'utf8');
+    } catch {
+        // file doesn't exist, ignore
+    }
+
+    const lines = content.split('\n');
+    const existingIndex = lines.findIndex(l => l.startsWith('GEMINI_API_KEY='));
+    
+    if (existingIndex > -1) {
+        lines[existingIndex] = `GEMINI_API_KEY=${apiKey}`;
+    } else {
+        lines.push(`GEMINI_API_KEY=${apiKey}`);
+    }
+
+    await fs.writeFile(envPath, lines.join('\n').trim() + '\n');
+    log.success(chalk.green('Successfully saved GEMINI_API_KEY to .env'));
+    outro('You are ready to use AI-powered fixes!');
+  });
+
 
 program.command('advice')
   .description('Get AI-driven technical advice for your setup')

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Text, render, Transform } from 'ink';
+import { Box, Text, render, Transform, useInput, useApp } from 'ink';
 import gradient from 'gradient-string';
 import figlet from 'figlet';
 import { HealthReport, CheckResult } from '@devpulse/shared';
@@ -89,23 +89,28 @@ const AICard = ({ check }: { check: CheckResult }) => (
     )}
   </Box>
 );
-
 const Footer = () => (
     <Box gap={2} marginTop={1}>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>devpulse fix --all</Text>
+        <Box borderStyle="round" borderColor="yellow" paddingX={1}>
+            <Text>Press <Text bold color="yellow">f</Text> to Fix with Agent</Text>
         </Box>
         <Box borderStyle="round" borderColor="dim" paddingX={1}>
             <Text>Export report</Text>
         </Box>
-        <Box borderStyle="round" borderColor="dim" paddingX={1}>
-            <Text>Reset demo</Text>
-        </Box>
     </Box>
 );
 
-const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => {
+const ReportDashboard = ({ initialReport, onFixRequest }: { initialReport: HealthReport, onFixRequest: () => void }) => {
   const [report, setReport] = useState(initialReport);
+  const { exit } = useApp();
+
+  useInput((input, key) => {
+    if (input === 'f') {
+        onFixRequest();
+        exit();
+    }
+  });
+
   const [animatedScore, setAnimatedScore] = useState(0);
 
   useEffect(() => {
@@ -182,11 +187,18 @@ const ReportDashboard = ({ initialReport }: { initialReport: HealthReport }) => 
 };
 
 export function renderReport(report: HealthReport) {
-  const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} />);
+  let resolveFixRequest: () => void;
+  const fixPromise = new Promise<void>((resolve) => {
+    resolveFixRequest = resolve;
+  });
+
+  const { waitUntilExit, rerender } = render(<ReportDashboard initialReport={report} onFixRequest={() => resolveFixRequest()} />);
+  
   return {
     waitUntilExit,
+    fixRequested: () => fixPromise,
     update: (newReport: HealthReport) => {
-        rerender(<ReportDashboard initialReport={newReport} />);
+        rerender(<ReportDashboard initialReport={newReport} onFixRequest={() => resolveFixRequest()} />);
     }
   };
 }
