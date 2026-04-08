@@ -9,6 +9,66 @@ export interface StackRequirement {
   rangeType: 'exact' | 'semver-range' | 'min' | 'unknown';
 }
 
+export type DependencyMap = Record<string, string>;
+
+/**
+ * Converts a StackRequirement[] (output of detectStack) into a flat
+ * DependencyMap suitable for cloud sync, status comparison, and diffing.
+ *
+ * Key naming convention:
+ *   npm packages      → bare name         e.g. "react"
+ *   pip packages      → "pip:<name>"      e.g. "pip:flask"
+ *   runtimes          → "runtime:<tool>"  e.g. "runtime:node"
+ *   tools / managers  → "tool:<name>"     e.g. "tool:docker"
+ *   env variable keys → "env:<KEY>"       e.g. "env:DATABASE_URL"
+ *   conflicts         → skipped
+ *
+ * Unknown / null versions default to "*".
+ */
+export function requirementsToDependencyMap(reqs: StackRequirement[]): DependencyMap {
+  const map: DependencyMap = {};
+
+  const RUNTIMES = new Set([
+    'node', 'python', 'go', 'ruby', 'java', 'rust', 'php',
+    'dotnet', 'elixir', 'dart',
+  ]);
+  const TOOLS = new Set([
+    'npm', 'pnpm', 'yarn', 'gradle', 'maven', 'cargo',
+    'composer', 'mix', 'cmake', 'make', 'flutter', 'docker',
+  ]);
+
+  for (const req of reqs) {
+    // Skip conflict markers
+    if (req.tool.includes(':conflict')) continue;
+
+    const version = req.required?.trim() || '*';
+
+    if (req.tool.startsWith('npm_pkg:')) {
+      // npm package — strip prefix, use bare name
+      const name = req.tool.slice('npm_pkg:'.length);
+      map[name] = version;
+    } else if (req.tool.startsWith('pip_pkg:')) {
+      // pip package — use "pip:<name>" to avoid collisions with npm
+      const name = req.tool.slice('pip_pkg:'.length);
+      map[`pip:${name}`] = version;
+    } else if (req.tool === 'env') {
+      // Environment variable key — required is the key name
+      if (req.required) {
+        map[`env:${req.required}`] = '*';
+      }
+    } else if (RUNTIMES.has(req.tool)) {
+      map[`runtime:${req.tool}`] = version;
+    } else if (TOOLS.has(req.tool)) {
+      map[`tool:${req.tool}`] = version;
+    } else {
+      // Catch-all for heuristic entries (Gemfile → "ruby", etc.)
+      map[`tool:${req.tool}`] = version;
+    }
+  }
+
+  return map;
+}
+
 // ─── Caches ─────────────────────────────────────────────────────────
 const fileCache = new Map<string, string>();
 

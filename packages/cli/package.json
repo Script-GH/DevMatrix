@@ -17,6 +17,7 @@
     "@clack/prompts": "^0.7.0",
     "@devpulse/shared": "*",
     "@iarna/toml": "^2.2.5",
+    "@supabase/supabase-js": "^2.102.1",
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
     "dotenv": "^17.4.1",

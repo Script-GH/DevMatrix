@@ -14,6 +14,7 @@ import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { getAIFixes, getTechnicalAdvice } from './ai/AIAdvisor.js';
 import { HealthReport } from '@devpulse/shared';
+import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink } from './commands.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.devpulse');
 const CONFIG_ENV_PATH = path.join(CONFIG_DIR, '.env');
@@ -141,6 +142,18 @@ program.command('scan')
     } else if (pendingAction === 'advice') {
       await runAdvice();
     }
+
+    // Auto-push version snapshot if project is configured
+    try {
+      const { readLocalConfig } = await import('./utils/config.js');
+      const localCfg = await readLocalConfig();
+      if (localCfg.projectId) {
+        // Fire-and-forget — don't block the terminal
+        cmdLogsPush().catch(() => {
+          // Silent: network errors should not break the scan UX
+        });
+      }
+    } catch {}
   });
 
 program.command('fix')
@@ -193,6 +206,90 @@ program.command('auth')
     log.success(chalk.green(`GROQ_API_KEY saved to ${CONFIG_ENV_PATH}`));
     outro('You are ready to use AI fixes. Run `dmx scan` from anywhere.');
   });
+
+// ─── dmx add ─────────────────────────────────────────────────────────────────
+
+const addCmd = program
+  .command('add')
+  .description('Register resources with DevMatrix');
+
+addCmd
+  .command('dev <projectId>')
+  .description('Join a project and register your system as a developer')
+  .action(async (projectId: string) => {
+    await cmdAddDev(projectId);
+  });
+
+// ─── dmx update ──────────────────────────────────────────────────────────────
+
+const updateCmd = program
+  .command('update')
+  .description('Sync dependencies with the project or a team member');
+
+updateCmd
+  .command('list')
+  .description('Show packages that are out of sync with the official project state')
+  .action(async () => {
+    await cmdUpdateList();
+  });
+
+updateCmd
+  .command('[devName]')
+  .description(
+    'Apply official project versions (no arg) or a specific developer\'s versions'
+  )
+  .action(async (devName?: string) => {
+    if (!devName) {
+      await cmdUpdateOfficial();
+    } else {
+      await cmdUpdateFrom(devName);
+    }
+  });
+
+// ─── dmx status ──────────────────────────────────────────────────────────────
+
+program
+  .command('status')
+  .description('Compare local deps against Official project state and Team Max')
+  .action(async () => {
+    await cmdStatus();
+  });
+
+// ─── dmx logs ────────────────────────────────────────────────────────────────
+
+const logsCmd = program
+  .command('logs')
+  .description('Manage version timeline logs');
+
+logsCmd
+  .command('push')
+  .description('Push current dependency versions to the project timeline')
+  .action(async () => {
+    await cmdLogsPush();
+  });
+
+// ─── dmx list ────────────────────────────────────────────────────────────────
+
+const listCmd = program
+  .command('list')
+  .description('List project resources');
+
+listCmd
+  .command('devs')
+  .description('List all registered developers for the current project')
+  .action(async () => {
+    await cmdListDevs();
+  });
+
+// ─── dmx link ────────────────────────────────────────────────────────────────
+
+program
+  .command('link <webToken>')
+  .description('Link this CLI to your DMX web account')
+  .action(async (webToken: string) => {
+    await cmdLink(webToken);
+  });
+
 
 async function runFix() {
   const cwd = process.cwd();
