@@ -1,12 +1,16 @@
 #!/usr/bin/env node
+import 'dotenv/config';
 import { Command } from 'commander';
 import fs from 'fs/promises';
 import path from 'path';
+import { intro, outro, password, log } from '@clack/prompts';
+import chalk from 'chalk';
 import { probeSystem } from './scanner/SystemProber.js';
 import { detectStack } from './scanner/StackDetector.js';
 import { parseEnv } from './scanner/EnvParser.js';
 import { computeScore, evaluateEnvironment } from './engine/DiffEngine.js';
 import { getAIFixes } from './ai/AIAdvisor.js';
+import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { HealthReport } from '@devpulse/shared';
 
@@ -33,10 +37,7 @@ program.command('scan')
 
     let ui: any;
     if (!options.json) {
-        ui = renderReport(report, {
-            onFix: () => runFix(),
-            onAdvice: () => runAdvice()
-        });
+        ui = renderReport(report);
     }
 
     // 1. Parallel Discovery & Scanning
@@ -72,17 +73,15 @@ program.command('scan')
     
     if (ui) ui.update({ ...report });
 
-    // 4. Fetch AI Context for Failures
-    const failedChecks = checks.filter(c => !c.passed);
-    if (failedChecks.length > 0) {
-        const aiFixes = await getAIFixes(failedChecks);
-        for (const fix of aiFixes) {
-            const target = report.checks.find(c => c.id === fix.id);
-            if (target) {
-                target.explanation = fix.explanation;
-                target.fixCommand = fix.fixCommand;
-                target.risk = fix.risk;
-            }
+    // 5. Fetch AI Context for Failures
+    const aiFixes = await getAIFixes(checks);
+    for (const fix of aiFixes) {
+        const target = report.checks.find(c => c.id === fix.id);
+        if (target) {
+            target.explanation = fix.explanation;
+            target.reasoning = fix.reasoning;
+            target.fixCommand = fix.fixCommand;
+            target.risk = fix.risk;
         }
     }
     
@@ -90,21 +89,96 @@ program.command('scan')
         console.log(JSON.stringify(report, null, 2));
     } else {
         ui.update({ ...report });
-        await ui.waitUntilExit();
+        
+        // Wait for either exit or fix request
+        await Promise.race([
+            ui.waitUntilExit(),
+            ui.fixRequested().then(async () => {
+                // Dashboard unmounted, now run the fixer
+                const failures = report.checks.filter(c => !c.passed);
+                await runAgentFixer(failures);
+            })
+        ]);
     }
   });
 
-program.command('fix').action(runFix);
-program.command('advice').action(runAdvice);
+program.command('fix')
+  .description('Automatically fix environment issues using the DevPulse Agent')
+  .action(async () => {
+    const cwd = process.cwd();
+    console.log('Scanning environment...');
+    const reqs = await detectStack(cwd);
+    const probes = await probeSystem(cwd);
+    const checks = evaluateEnvironment(reqs, probes);
+    const score = computeScore(checks);
+    
+    if (score === 100) {
+        console.log('Your environment is perfectly configured! No fixes needed.');
+        return;
+    }
+    
+    console.log('Analyzing failures with Gemini AI...');
+    const aiFixes = await getAIFixes(checks);
+    for (const fix of aiFixes) {
+        const target = checks.find(c => c.id === fix.id);
+        if (target) {
+            target.explanation = fix.explanation;
+            target.reasoning = fix.reasoning;
+            target.fixCommand = fix.fixCommand;
+            target.risk = fix.risk;
+        }
+    }
+    
+    const failures = checks.filter(c => !c.passed);
+    await runAgentFixer(failures);
+  });
 
-async function runFix() { 
-    console.log('\n⚡ dmx fix: Initiating automatic repair...');
-    await new Promise(r => setTimeout(r, 1000));
-}
+program.command('auth')
+  .description('Configure Gemini API Key persistently')
+  .action(async () => {
+    intro(chalk.bgBlue.white(' 🔑 DevPulse Authentication '));
+    
+    const apiKey = await password({
+      message: 'Enter your Gemini API Key:',
+      validate: (value: string) => {
+        if (!value) return 'API Key is required';
+        if (value.length < 20) return 'API Key looks too short';
+        return;
+      }
+    });
 
-async function runAdvice() {
-    console.log('\n🤖 dmx advice: Consulting AI...');
-    await new Promise(r => setTimeout(r, 1000));
-}
+    if (typeof apiKey === 'symbol' || !apiKey) {
+        outro('Authentication cancelled.');
+        return;
+    }
+
+    const envPath = path.join(process.cwd(), '.env');
+    let content = '';
+    try {
+        content = await fs.readFile(envPath, 'utf8');
+    } catch {
+        // file doesn't exist, ignore
+    }
+
+    const lines = content.split('\n');
+    const existingIndex = lines.findIndex(l => l.startsWith('GEMINI_API_KEY='));
+    
+    if (existingIndex > -1) {
+        lines[existingIndex] = `GEMINI_API_KEY=${apiKey}`;
+    } else {
+        lines.push(`GEMINI_API_KEY=${apiKey}`);
+    }
+
+    await fs.writeFile(envPath, lines.join('\n').trim() + '\n');
+    log.success(chalk.green('Successfully saved GEMINI_API_KEY to .env'));
+    outro('You are ready to use AI-powered fixes!');
+  });
+
+
+program.command('advice')
+  .description('Get AI-driven technical advice for your setup')
+  .action(() => {
+    console.log('dmx advice: Placeholder for AI advice.');
+  });
 
 program.parse();
