@@ -311,6 +311,8 @@ export interface RenderController {
   waitUntilExit: () => Promise<void>;
   /** Push a new report snapshot (e.g. after AI fixes arrive) */
   updateReport: (report: HealthReport, phase: UIPhase) => void;
+  /** Force the ink instance to unmount immediately */
+  unmount: () => void;
   /** The action the user chose — resolves only once user acts */
   actionPromise: Promise<UserAction>;
 }
@@ -369,7 +371,7 @@ export function renderReport(
         />
       );
     },
-
+    unmount: () => instance.unmount(),
     actionPromise,
   };
 }

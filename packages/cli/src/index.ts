@@ -12,7 +12,7 @@ import { detectStack }         from './scanner/StackDetector.js';
 import { parseEnv }            from './scanner/EnvParser.js';
 import { computeScore, evaluateEnvironment } from './engine/DiffEngine.js';
 import { runAgentFixer }       from './ai/AgentRunner.js';
-import { renderReport }        from './render/TerminalUI.js';
+import { renderReport, RenderController } from './render/TerminalUI.js';
 import { getAIFixes, getTechnicalAdvice } from './ai/AIAdvisor.js';
 import { HealthReport }        from '@devpulse/shared';
 import {
@@ -196,7 +196,7 @@ program
     if (action === 'fix') {
       await runFix(report);
     } else if (action === 'advice') {
-      await runAdvice();
+      await runAdviseFlow(ui);
     }
     // 'quit' — fall through, process exits naturally
 
@@ -239,6 +239,7 @@ program
 
 program
   .command('advice')
+  .alias('advise')
   .description('Get AI-driven technical advice for your setup')
   .option('--raw', 'Output raw markdown without UI rendering')
   .action(async (options) => {
@@ -356,6 +357,16 @@ async function runFix(report: HealthReport): Promise<void> {
     return;
   }
   await runAgentFixer(failures);
+}
+
+/**
+ * runAdviseFlow — dedicated entry point for triggered advice from the UI.
+ * Ensures the Ink dashboard is fully unmounted before starting the
+ * interactive/spinner-based advice flow to avoid terminal capture conflicts.
+ */
+async function runAdviseFlow(ui: RenderController): Promise<void> {
+  ui.unmount();
+  await runAdvice();
 }
 
 /**
