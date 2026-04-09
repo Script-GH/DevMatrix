@@ -104,9 +104,9 @@ function printDiff(diff: DependencyDiff): void {
     diff.updated.forEach(({ name, oldVersion, newVersion }) =>
       console.log(
         chalk.yellow(`    ~ ${name}: `) +
-          chalk.dim(oldVersion) +
-          chalk.yellow(' → ') +
-          chalk.white(newVersion)
+        chalk.dim(oldVersion) +
+        chalk.yellow(' → ') +
+        chalk.white(newVersion)
       )
     );
   }
@@ -170,11 +170,11 @@ export async function cmdAddDev(projectId: string): Promise<void> {
     const isNew = !existing;
 
     // 1. Update cloud registration
-    await upsertDeveloper(projectId, devId, { 
-       name: devName, 
-       dependencies: deps, 
-       env, 
-       user_id: config.userId 
+    await upsertDeveloper(projectId, devId, {
+      name: devName,
+      dependencies: deps,
+      env,
+      user_id: config.userId
     });
 
     // 2. Save project ID locally to the current directory
@@ -202,11 +202,11 @@ export async function cmdAddDev(projectId: string): Promise<void> {
 
     log.info(
       `  ${chalk.bold('Developer ID:')} ${chalk.cyan(devId)}\n` +
-        `  ${chalk.bold('Project ID:')}   ${chalk.cyan(projectId)}\n` +
-        `  ${chalk.bold('Username:')}     ${chalk.cyan(devName)}\n` +
-        `  ${chalk.bold('Deps captured:')} ${chalk.cyan(Object.keys(deps).length)}\n` +
-        `  Project config saved to ${chalk.bold('./.dmxrc')}\n` +
-        `  Identity saved to ${chalk.dim('~/.dmxrc')}`
+      `  ${chalk.bold('Project ID:')}   ${chalk.cyan(projectId)}\n` +
+      `  ${chalk.bold('Username:')}     ${chalk.cyan(devName)}\n` +
+      `  ${chalk.bold('Deps captured:')} ${chalk.cyan(Object.keys(deps).length)}\n` +
+      `  Project config saved to ${chalk.bold('./.dmxrc')}\n` +
+      `  Identity saved to ${chalk.dim('~/.dmxrc')}`
     );
   } catch (err: any) {
     s.stop(chalk.red('Registration failed.'));
@@ -239,7 +239,7 @@ export async function cmdUpdateList(): Promise<void> {
       s.stop(chalk.yellow('No official project state exists yet.'));
       log.info(
         'No developer has promoted an official version yet.\n' +
-          'Run `dmx logs push` to set the first official baseline.'
+        'Run `dmx logs push` to set the first official baseline.'
       );
       return;
     }
@@ -256,11 +256,10 @@ export async function cmdUpdateList(): Promise<void> {
     if (hasChanges) {
       console.log('');
       console.log(
-        chalk.dim(`  Official state last updated: ${
-          officialState.lastUpdated
+        chalk.dim(`  Official state last updated: ${officialState.lastUpdated
             ? new Date(officialState.lastUpdated as any).toLocaleString()
             : 'unknown'
-        }`)
+          }`)
       );
       console.log('');
       log.info(chalk.bold('Changes in official state vs your local:'));
@@ -452,8 +451,8 @@ export async function cmdStatus(): Promise<void> {
         localStr === officialStr
           ? chalk.green(localStr.padEnd(COL_VER))
           : localStr === '—'
-          ? chalk.dim('—'.padEnd(COL_VER))
-          : chalk.red(localStr.padEnd(COL_VER));
+            ? chalk.dim('—'.padEnd(COL_VER))
+            : chalk.red(localStr.padEnd(COL_VER));
 
       const officialColored = chalk.blue((officialStr).padEnd(COL_VER));
 
@@ -466,10 +465,10 @@ export async function cmdStatus(): Promise<void> {
 
       console.log(
         '  ' +
-          pkg.padEnd(COL_PKG).slice(0, COL_PKG) +
-          localColored +
-          officialColored +
-          teamColored
+        pkg.padEnd(COL_PKG).slice(0, COL_PKG) +
+        localColored +
+        officialColored +
+        teamColored
       );
     }
 
@@ -478,7 +477,7 @@ export async function cmdStatus(): Promise<void> {
     if (outOfSync > 0) {
       log.warn(
         `${chalk.red(outOfSync)} package(s) differ from the official state. ` +
-          `Run ${chalk.cyan('dmx update')} to align.`
+        `Run ${chalk.cyan('dmx update')} to align.`
       );
     } else {
       log.success('You are fully aligned with the official project state. ✓');
@@ -552,14 +551,13 @@ export async function cmdLogsPush(): Promise<void> {
     await createNotification(projectId, {
       message,
       changes: diff,
-      triggeredBy: devId,
+      userId: config.userId ?? devId, // Prefer linked web account ID over local machine ID
     });
 
     s.stop(chalk.green('Version snapshot pushed.'));
 
-    // Update metadata (team members, etc) in background
     // Update metadata (team members, etc) in background quietly
-    cmdProjectInfo({ silent: true }).catch(() => {});
+    cmdProjectInfo({ silent: true }).catch(() => { });
 
     console.log('');
     log.info(chalk.bold('Changes recorded in this snapshot:'));
@@ -602,8 +600,8 @@ export async function cmdListDevs(): Promise<void> {
 
       console.log(
         `  ${chalk.cyan.bold(data.name)}${isMe ? chalk.green(' (you)') : ''}  ` +
-          chalk.dim(`id: ${id}`) +
-          `\n    ${chalk.white(depCount)} deps  |  last active: ${chalk.dim(lastActive)}`
+        chalk.dim(`id: ${id}`) +
+        `\n    ${chalk.white(depCount)} deps  |  last active: ${chalk.dim(lastActive)}`
       );
     }
     console.log('');
@@ -676,7 +674,7 @@ async function syncEnvKeys(
         `Appended ${missing.length} missing env key(s) to .env (fill in values): `
       ) + chalk.dim(missing.join(', '))
     );
-  } catch {}
+  } catch { }
 }
 
 // ─── dmx link ────────────────────────────────────────────────────────────────
@@ -800,13 +798,13 @@ export async function cmdProjectInfo(options: { json?: boolean; silent?: boolean
     const hasTeamChanged = JSON.stringify(config.team) !== JSON.stringify(team);
 
     if (hasMetadataChanged || hasTeamChanged) {
-        const { writeProjectConfig } = await import('./utils/config.js');
-        await writeProjectConfig({
-            projectId,
-            metadata,
-            team,
-            lastSynced: new Date().toISOString()
-        });
+      const { writeProjectConfig } = await import('./utils/config.js');
+      await writeProjectConfig({
+        projectId,
+        metadata,
+        team,
+        lastSynced: new Date().toISOString()
+      });
     }
 
     if (options.json && !options.silent) {
@@ -814,7 +812,7 @@ export async function cmdProjectInfo(options: { json?: boolean; silent?: boolean
     } else if (!options.silent) {
       console.log(chalk.bold.white(`\n  Project: ${projectId}`));
       console.log(chalk.dim(`  Team size: ${developers.length} developer(s)\n`));
-      
+
       if (officialState) {
         console.log(chalk.blue(`  Official state last updated by ${officialState.updatedByName}`));
       }
