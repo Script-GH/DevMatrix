@@ -178,7 +178,11 @@ export async function cmdAddDev(projectId: string): Promise<void> {
     });
 
     // 2. Save project ID locally to the current directory
+    const { writeProjectConfig } = await import('./utils/config.js');
     await writeProjectConfig({ projectId });
+
+    // 3. Refresh and persist full project metadata (team, names) immediately
+    await cmdProjectInfo({ json: true });
 
     // 3. Push initial version snapshot if this is a fresh join
     if (isNew) {
@@ -553,6 +557,9 @@ export async function cmdLogsPush(): Promise<void> {
 
     s.stop(chalk.green('Version snapshot pushed.'));
 
+    // Update metadata (team members, etc) in background
+    cmdProjectInfo({ json: true }).catch(() => {});
+
     console.log('');
     log.info(chalk.bold('Changes recorded in this snapshot:'));
     printDiff(diff);
@@ -743,3 +750,81 @@ export async function cmdRemoveProject(): Promise<void> {
   }
 }
 
+// ─── dmx project info ────────────────────────────────────────────────────────
+
+/**
+ * Returns structured project information (name, official state, team members).
+ */
+export async function cmdProjectInfo(options: { json?: boolean }): Promise<void> {
+  try {
+    const config = await readLocalConfig();
+    const { projectId } = config;
+
+    if (!projectId) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: 'Project not initialized', initialized: false }));
+      } else {
+        log.error('No project configured in this directory.');
+      }
+      return;
+    }
+
+    const [officialState, developers] = await Promise.all([
+      getProjectLatestUpdate(projectId),
+      getAllDevelopers(projectId),
+    ]);
+
+    const metadata = officialState ? {
+      updatedByName: officialState.updatedByName,
+      lastUpdated: officialState.lastUpdated,
+    } : undefined;
+
+    const team = developers.map(d => ({
+      id: d.id,
+      name: d.data.name,
+      lastActive: d.data.last_active,
+      isMe: d.id === config.devId
+    }));
+
+    const result = {
+      initialized: true,
+      projectId,
+      officialState: metadata,
+      team
+    };
+
+    // PERSISTENCE: Save retrieved metadata to local config for the extension
+    const { writeProjectConfig } = await import('./utils/config.js');
+    await writeProjectConfig({
+        projectId,
+        metadata,
+        team,
+        lastSynced: new Date().toISOString()
+    });
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(chalk.bold.white(`\n  Project: ${projectId}`));
+      console.log(chalk.dim(`  Team size: ${developers.length} developer(s)\n`));
+      
+      if (officialState) {
+        console.log(chalk.blue(`  Official state last updated by ${officialState.updatedByName}`));
+      }
+
+      console.log(chalk.bold.cyan('\n  Team Members:'));
+      developers.forEach(({ data, id }) => {
+        const isMe = id === config.devId;
+        console.log(`  - ${data.name}${isMe ? chalk.green(' (you)') : ''} ${chalk.dim(`[${id.slice(0, 8)}]`)}`);
+      });
+      console.log('');
+    }
+  } catch (err: any) {
+    if (options.json) {
+      console.log(JSON.stringify({ error: err.message }));
+    } else {
+      log.error(`Failed to fetch project info: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}

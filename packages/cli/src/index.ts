@@ -14,7 +14,7 @@ import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { getAIFixes, getTechnicalAdvice } from './ai/AIAdvisor.js';
 import { HealthReport } from '@devpulse/shared';
-import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink, cmdRemoveProject } from './commands.js';
+import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink, cmdRemoveProject, cmdProjectInfo } from './commands.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.devpulse');
 const CONFIG_ENV_PATH = path.join(CONFIG_DIR, '.env');
@@ -278,6 +278,25 @@ listCmd
   .description('List all registered developers for the current project')
   .action(async () => {
     await cmdListDevs();
+  });
+
+// ─── dmx project ─────────────────────────────────────────────────────────────
+const projectCmd = program.command('project').description('Manage project-specific data');
+
+projectCmd
+  .command('info')
+  .description('Fetch project details and team list')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    await cmdProjectInfo(options);
+  });
+
+program
+  .command('project-info')
+  .description('Fetch project details and team list (alias for project info)')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    await cmdProjectInfo(options);
   });
 
 // ─── dmx link ────────────────────────────────────────────────────────────────
