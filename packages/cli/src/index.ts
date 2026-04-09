@@ -91,10 +91,11 @@ function mergeAIFixes(
   for (const fix of aiFixes) {
     const target = checks.find(c => c.id === fix.id);
     if (!target) continue;
-    if (fix.explanation !== undefined) target.explanation = fix.explanation;
-    if (fix.reasoning   !== undefined) target.reasoning   = fix.reasoning;
-    if (fix.fixCommand  !== undefined) target.fixCommand  = fix.fixCommand;
-    if (fix.risk        !== undefined) target.risk        = fix.risk;
+    target.explanation = fix.explanation;
+    target.reasoning = fix.reasoning;
+    target.fixCommand = fix.fixCommand;
+    target.manualSteps = fix.manualSteps;
+    target.risk = fix.risk;
   }
 }
 
