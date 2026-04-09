@@ -22,6 +22,9 @@ import semver from 'semver';
 import { readLocalConfig, writeLocalConfig, LocalConfig, writeProjectConfig, deleteProjectConfig } from './utils/config.js';
 import { maskEnvVariables } from './utils/env.js';
 import { getDependencyDiff } from './engine/DiffEngine.js';
+import { getSyncFixes } from './ai/AIAdvisor.js';
+import { runAgentFixer } from './ai/AgentRunner.js';
+import { probeSystem } from './scanner/SystemProber.js';
 import type { DependencyDiff } from './engine/DiffEngine.js';
 import { detectStack, requirementsToDependencyMap } from './scanner/StackDetector.js';
 import type { DependencyMap } from './scanner/StackDetector.js';
@@ -290,8 +293,9 @@ export async function cmdUpdateOfficial(): Promise<void> {
       return;
     }
 
-    s.stop(`Applying ${chalk.bold('official')} project dependencies…`);
-    await applyDepsToPackageJson(cwd, officialState.dependencies, 'Official Project');
+    const localDeps = await scanLocalDeps(cwd);
+    s.stop(`Analyzing sync path for ${chalk.bold('official')} project dependencies…`);
+    await applyDependenciesWithAI(cwd, localDeps, officialState.dependencies, 'Official Project');
 
     // Update own Supabase doc to reflect the sync
     const newDeps = await scanLocalDeps(cwd);
@@ -333,9 +337,10 @@ export async function cmdUpdateFrom(devName: string): Promise<void> {
     }
 
     const sourceLabel = dev.data.name;
-    s.stop(`Applying versions from ${chalk.cyan(sourceLabel)}…`);
+    const localDeps = await scanLocalDeps(cwd);
+    s.stop(`Analyzing sync path from ${chalk.cyan(sourceLabel)}…`);
 
-    await applyDepsToPackageJson(cwd, dev.data.dependencies, sourceLabel);
+    await applyDependenciesWithAI(cwd, localDeps, dev.data.dependencies, sourceLabel);
 
     // Sync env keys (append missing, leave values blank)
     const remoteEnvKeys = Object.keys(dev.data.env ?? {});
@@ -600,64 +605,49 @@ export async function cmdListDevs(): Promise<void> {
   }
 }
 
-// ─── Internal: apply remote deps to package.json ─────────────────────────────
-
-async function applyDepsToPackageJson(
+async function applyDependenciesWithAI(
   cwd: string,
-  remoteDeps: DependencyMap,
+  localDeps: DependencyMap,
+  targetDeps: DependencyMap,
   sourceLabel: string
 ): Promise<void> {
-  const pkgPath = path.join(cwd, 'package.json');
-  let pkg: any;
-  try {
-    pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-  } catch {
-    log.error('Cannot read package.json in the current directory.');
-    process.exit(1);
-  }
+  const diff = getDependencyDiff(localDeps, targetDeps);
+  const hasChanges = diff.added.length || diff.updated.length || diff.removed.length;
 
-  // Only diff/apply npm-level keys — strip runtime:, pip:, env:, tool: prefixes
-  const remoteNpmDeps = extractNpmDeps(remoteDeps);
-  const localDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-  const diff = getDependencyDiff(localDeps, remoteNpmDeps);
-  const hasNodeChanges = diff.added.length || diff.updated.length || diff.removed.length;
-
-  if (!hasNodeChanges) {
-    log.info(chalk.dim(`Already in sync with ${sourceLabel}. No changes applied.`));
+  if (!hasChanges) {
+    log.info(chalk.dim(`Already in sync with ${sourceLabel}. No changes needed.`));
     return;
   }
 
-  printDiff(diff);
-
-  // Apply changes to correct section (dep or devDep)
-  for (const name of diff.added) {
-    if (remoteNpmDeps[name]) {
-      pkg.dependencies = pkg.dependencies ?? {};
-      pkg.dependencies[name] = remoteNpmDeps[name];
-    }
-  }
-  for (const { name, newVersion } of diff.updated) {
-    if (pkg.dependencies?.[name]) pkg.dependencies[name] = newVersion;
-    else if (pkg.devDependencies?.[name]) pkg.devDependencies[name] = newVersion;
-  }
-  for (const name of diff.removed) {
-    delete pkg.dependencies?.[name];
-    delete pkg.devDependencies?.[name];
-  }
-
-  await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-  log.info(chalk.cyan('package.json updated. Running npm install…'));
-
   const s = spinner();
-  s.start('npm install');
+  s.start('Consulting Groq AI for an expert sync plan...');
+
   try {
-    await execa('npm', ['install'], { cwd, stdio: 'pipe' });
-    s.stop(chalk.green('npm install complete.'));
+    // 1. Gather system context (package managers, runtimes)
+    const system = await probeSystem(cwd);
+    const systemSummary = Object.entries(system)
+      .filter(([_, v]) => (v as any).found)
+      .map(([k, v]) => `${k} ${(v as any).version || ''}`)
+      .join(', ');
+
+    // 2. Get the fix plan from AI
+    const fixes = await getSyncFixes(diff, localDeps, targetDeps, systemSummary);
+    s.stop('Sync plan generated.');
+
+    if (fixes.length === 0) {
+      log.warn('AI could not generate a safe sync plan. Please check the diff and update manually.');
+      printDiff(diff);
+      return;
+    }
+
+    // 3. Hand over to the Agent Runner for execution
+    await runAgentFixer(fixes as any);
   } catch (err: any) {
-    s.stop(chalk.red('npm install failed.'));
-    log.warn(err.message);
+    s.stop(chalk.red('Failed to generate sync plan.'));
+    log.error(err.message);
   }
 }
+
 
 async function syncEnvKeys(
   cwd: string,

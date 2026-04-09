@@ -231,24 +231,14 @@ addCmd
 
 // ─── dmx update ──────────────────────────────────────────────────────────────
 
-const updateCmd = program
+program
   .command('update')
-  .description('Sync dependencies with the project or a team member');
-
-updateCmd
-  .command('list')
-  .description('Show packages that are out of sync with the official project state')
-  .action(async () => {
-    await cmdUpdateList();
-  });
-
-updateCmd
-  .command('[devName]')
-  .description(
-    'Apply official project versions (no arg) or a specific developer\'s versions'
-  )
+  .argument('[devName]', 'Apply official project versions (no arg) or a specific developer\'s versions')
+  .description('Sync dependencies with the project or a team member. Use "list" to see changes.')
   .action(async (devName?: string) => {
-    if (!devName) {
+    if (devName === 'list') {
+      await cmdUpdateList();
+    } else if (!devName) {
       await cmdUpdateOfficial();
     } else {
       await cmdUpdateFrom(devName);
