@@ -12,8 +12,23 @@ export interface GlobalConfig {
   userId?: string;
 }
 
+export interface ProjectMetadata {
+  updatedByName?: string;
+  lastUpdated?: string;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  lastActive?: string;
+  isMe: boolean;
+}
+
 export interface ProjectConfig {
   projectId: string;
+  metadata?: ProjectMetadata;
+  team?: TeamMember[];
+  lastSynced?: string;
 }
 
 export type EffectiveConfig = GlobalConfig & Partial<ProjectConfig>;
@@ -79,10 +94,15 @@ export async function readLocalConfig(): Promise<EffectiveConfig> {
  * In the new system, this only updates Global properties unless specified.
  */
 export async function writeLocalConfig(config: EffectiveConfig): Promise<void> {
-  const { projectId, ...global } = config;
-  await writeGlobalConfig(global);
+  const { projectId, metadata, team, lastSynced, ...global } = config;
+  await writeGlobalConfig(global as GlobalConfig);
   if (projectId) {
-    await writeProjectConfig({ projectId });
+    await writeProjectConfig({ 
+      projectId, 
+      metadata, 
+      team, 
+      lastSynced 
+    });
   }
 }
 
