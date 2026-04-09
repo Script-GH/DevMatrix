@@ -20,7 +20,7 @@ function getConfig() {
   if (!url || !key) {
     throw new Error(
       'Missing Supabase credentials.\n' +
-        'Add SUPABASE_URL and SUPABASE_ANON_KEY to ~/.devpulse/.env'
+      'Add SUPABASE_URL and SUPABASE_ANON_KEY to ~/.devpulse/.env'
     );
   }
   return { url, key };
@@ -113,7 +113,7 @@ export async function deleteDeveloper(
     .eq('project_id', projectId);
 
   if (error) throw new Error(`deleteDeveloper: ${error.message}`);
-  
+
   if (count === 0) {
     throw new Error('No matching registration found in the database. (It may have been deleted already or blocked by RLS)');
   }
@@ -281,13 +281,14 @@ export async function getVersionHistory(
  */
 export async function createNotification(
   projectId: string,
-  payload: { message: string; changes: DependencyDiff; triggeredBy: string }
+  payload: { message: string; changes: DependencyDiff; userId: string }
 ): Promise<void> {
   const sb = getClient();
   const { error } = await sb.from('notifications').insert({
     project_id: projectId,
     message: payload.message,
     changes: payload.changes,
+    user_id: payload.userId,
     created_at: new Date().toISOString(),
   });
   if (error) throw new Error(`createNotification: ${error.message}`);

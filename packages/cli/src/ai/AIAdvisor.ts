@@ -6,51 +6,73 @@ const GROQ_TIMEOUT_MS = 15000;
 const GROQ_MAX_RETRIES = 2;
 
 const SYNC_SYSTEM_PROMPT = `
-You are DevPulse, an expert environment architect.
-You receive a JSON object containing:
-  - diff: { added: string[], updated: { name: string, oldVersion: string, newVersion: string }[], removed: string[] }
-  - localDeps: full map of current local versions
-  - targetDeps: full map of desired versions
-  - system: summary of installed runtimes and package managers (e.g., "pnpm available", "python 3.10 detected")
+You are DevPulse, a senior DevOps engineer syncing a developer's local environment to a target project state.
+You receive a JSON object with: diff (added/updated/removed deps), localDeps, targetDeps, system (detected runtimes and package managers).
 
-Your task is to generate a list of shell commands to sync the local environment to the target state.
-For each action, return a JSON object with:
-  - id: A unique identifier for this action (e.g. "update:next").
-  - name: A short, descriptive title (e.g. "Update Next.js to 16.2.3").
-  - reasoning: Technical logic (e.g., "Updating package.json to match target project state").
-  - explanation: 1 sentence summary of the sync action.
-  - fixCommand: The exact shell command (e.g. "npm install x@1.2.3" or "sed -i ... requirements.txt").
-    - If a file needs editing (like Gemfile or requirements.txt), use standard non-interactive tools like 'sed', 'echo', or redirecting.
-    - If a package manager command exists (npm, pip, bundle), use it.
+For every entry in diff.added, diff.updated, and diff.removed, output one action object.
+
+Each action object must have:
+  - id: "added:<name>" | "updated:<name>" | "removed:<name>" — unique, no spaces
+  - name: short imperative title, e.g. "Install express@4.18.2" or "Remove lodash"
+  - reasoning: 1 sentence — why this change is required to match the target state
+  - explanation: 1 sentence — plain English description of the sync action
+  - fixCommand: a single non-interactive shell command. Use the package manager from the system field if available. Chain with && if needed. Never use interactive prompts.
   - risk: "safe" | "moderate" | "destructive"
 
-Return a JSON object with a "fixes" key containing the array of actions. No preamble, no markdown.
+Rules:
+  - Return ONLY a JSON object with a "fixes" key containing the array. No markdown, no preamble.
+  - Every diff entry must produce exactly one action. No skipping.
+  - For file-based deps (Gemfile, requirements.txt), use sed or standard CLI tools — never manual editing instructions.
 `.trim();
 
 const SYSTEM_PROMPT = `
-You are DevPulse, an expert dev environment diagnostician.
-You receive a JSON array of environment check failures.
-For EACH issue, return a JSON object with these fields:
-  - id: (same as input)
-  - reasoning: A "thought process" block (3-4 sentences) explaining your technical logic. 
-    Explain what you're checking, why it likely failed, and why your proposed fix is the best approach.
-  - explanation: 1 sentence, plain English summary for the user.
-  - fixCommand: the exact shell command(s) to fix it, semicolon-separated.
-    If you are not certain of the exact command, return null.
-  - risk: "safe" | "moderate" | "destructive"
+You are DevPulse, a senior DevOps engineer performing automated environment triage.
+You receive a JSON array of failed environment checks. Each item has: id, name, category, severity, required, found.
 
-Return ONLY a valid JSON array. No preamble, no markdown fences.
+For EVERY item in the array, output one JSON object with exactly these fields:
+  - id: copy verbatim from input
+  - reasoning: 2 sentences MAX. First sentence: state the specific technical root cause (e.g. which binary is wrong, which PATH shim is missing, which version constraint is violated). Second sentence: explain why your chosen fix command is the safest and most direct remedy given the detected tool and version.
+  - explanation: exactly 1 sentence, plain English, no jargon. Must name the tool and the consequence if not fixed.
+  - fixCommand: a SINGLE shell command string that runs without prompts or interaction. Chain steps with &&. If version managers (nvm, pyenv, mise) are involved, prefer them. Return null ONLY if the fix genuinely requires manual secrets or GUI interaction.
+  - risk: "safe" (no system-wide side effects) | "moderate" (modifies global state, e.g. global npm install) | "destructive" (overwrites data or removes packages)
+
+Rules:
+  - Return ONLY a valid JSON array. No wrapper object, no markdown, no preamble.
+  - Every input item MUST produce exactly one output item. No skipping.
+  - fixCommand must be copy-pasteable into a bash terminal and succeed on the detected OS.
+  - Never suggest rebooting, opening a browser, or editing files in a GUI.
 `.trim();
 
 const RETRY_SYSTEM_PROMPT = `
-You are DevPulse, an expert dev environment diagnostician.
-You are helping recover from a failed shell remediation.
-Return ONLY valid JSON. No markdown, no code fences.
+You are DevPulse performing automated remediation recovery.
+A fix command was executed and failed. Your job is to diagnose the failure and produce a different command.
+
+Rules:
+  - Read the error output carefully. Identify the exact failure reason (permission denied, binary not found, wrong flag, network error, etc.).
+  - Never suggest the same command that already failed.
+  - Never suggest commands that require a GUI, browser, or user interaction.
+  - Return ONLY a valid JSON object with: reasoning, explanation, fixCommand.
+  - reasoning: 2 sentences. First: identify the exact cause of the failure from the error output. Second: explain why the new command avoids that cause.
+  - explanation: 1 sentence, plain English.
+  - fixCommand: a single bash-compatible command string, or null if human intervention is genuinely required.
+  - No markdown, no code fences, no preamble.
 `.trim();
 
 const ADVICE_SYSTEM_PROMPT = `
-You are DevPulse, a senior environment architect.
-Generate concise, practical, markdown-formatted guidance.
+You are DevPulse, a senior staff engineer reviewing a developer's local environment scan.
+You will receive a JSON array of check results — each has: id, name, passed, found, required.
+
+Your task: produce exactly 6 to 8 markdown bullet points of actionable advice.
+
+Output rules (strictly enforced):
+  - Start every line with "- " (dash space). No other line format.
+  - No headings, no numbered lists, no blank lines between bullets, no preamble, no closing remark.
+  - Each bullet: one sentence, under 110 characters including the "- " prefix.
+  - Prioritise failed checks (passed: false) — lead with the highest-severity issues.
+  - For each critical failure, name the tool, state the consequence, and state the remedy in one sentence.
+  - For passing checks, give one forward-looking tip per stack (e.g. upcoming EOL, performance setting, security flag).
+  - Never give generic advice like "keep your tools updated" — every bullet must reference a specific tool or check from the scan data.
+  - Never exceed 8 bullets. Never produce fewer than 6.
 `.trim();
 
 type ChatMessage = { role: 'system' | 'user'; content: string };
@@ -68,47 +90,30 @@ function compressAdvice(text: string): string {
   const clean = stripCodeFences(text).trim();
   if (!clean) return clean;
 
-  const minBullets = 5;
-  const maxBullets = 10;
-
-  const normalizedLines = clean
+  // Extract lines that are already bullet points — the model should produce these directly
+  const bullets = clean
     .split('\n')
-    .map((line) => line.trim())
+    .map(line => line.trim())
+    .filter(line => /^[-*]\s+/.test(line))
+    .map(line => line.replace(/^[-*]\s+/, '').trim())
     .filter(Boolean)
-    .filter((line) => !/^#{1,6}\s+/.test(line)); // drop markdown headings
+    .slice(0, 8);
 
-  const bulletLike = normalizedLines
-    .filter((line) => /^[-*]\s+/.test(line))
-    .map((line) => line.replace(/^[-*]\s+/, '').trim())
-    .filter(Boolean);
+  // If the model ignored the bullet format, fall back to sentence extraction
+  if (bullets.length < 3) {
+    const sentences = clean
+      .replace(/^#{1,6}\s+.*/gm, '')   // strip headings
+      .replace(/\n+/g, ' ')
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 10 && s.length < 120)
+      .slice(0, 8);
 
-  const sentencePool = clean
-    .replace(/\n+/g, ' ')
-    .split(/[.!?]+\s+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-
-  const source = bulletLike.length > 0 ? bulletLike : sentencePool;
-  const compact = source
-    .map((item) => item.replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-
-  const selected = compact.slice(0, maxBullets);
-  if (selected.length < minBullets) {
-    for (const sentence of sentencePool) {
-      if (selected.length >= minBullets) break;
-      const normalized = sentence.replace(/\s+/g, ' ').trim();
-      if (!normalized) continue;
-      if (selected.includes(normalized)) continue;
-      selected.push(normalized);
-    }
+    if (sentences.length === 0) return clean;
+    return sentences.map(s => `- ${s}`).join('\n');
   }
 
-  if (selected.length === 0) {
-    return '- Check environment scan output and re-run with `dmx scan`.\n- Run `dmx auth` to verify API key setup.';
-  }
-
-  return selected.slice(0, maxBullets).map((line) => `- ${line}`).join('\n');
+  return bullets.map(b => `- ${b}`).join('\n');
 }
 
 function parseJsonResponse<T>(text: string): T | null {
@@ -326,19 +331,17 @@ Return ONLY a valid JSON object. No preamble, no markdown.
 export async function getTechnicalAdvice(checks: CheckResult[]): Promise<string> {
   if (!getGroqApiKey()) return "Authentication required. Please run 'dmx auth'.";
 
-  const advicePrompt = `
-Give concise technical advice for this environment scan.
-Be strictly concise and action-oriented.
-
-Environment Scan Data:
-${JSON.stringify(checks.map(c => ({ id: c.id, passed: c.passed, name: c.name, found: c.found, required: c.required })))}
-
-Output format (strict):
-- Return ONLY markdown bullet points (no headings, no paragraphs).
-- Provide between 5 and 10 bullet points total.
-- Each bullet must be one short sentence.
-- Keep each bullet under 120 characters.
-  `.trim();
+  const advicePrompt = JSON.stringify(
+    checks.map(c => ({
+      id: c.id,
+      name: c.name,
+      passed: c.passed,
+      found: c.found ?? null,
+      required: c.required ?? null,
+      severity: c.severity ?? null,
+      category: c.category ?? null,
+    }))
+  );
 
   const text = await requestGroq([
     { role: 'system', content: ADVICE_SYSTEM_PROMPT },
