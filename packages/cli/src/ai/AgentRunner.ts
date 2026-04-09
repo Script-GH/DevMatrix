@@ -3,10 +3,6 @@ import { execa } from 'execa';
 import { CheckResult } from '@devpulse/shared';
 import { getRemedyForError } from './AIAdvisor.js';
 import chalk from 'chalk';
-import fs from 'fs';
-import { createInterface } from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
-import type { Interface } from 'node:readline/promises';
 
 type FixOutcome = 'fixed' | 'skipped' | 'failed';
 
@@ -18,91 +14,9 @@ type FixStats = {
 
 const MAX_ATTEMPTS = 3;
 
-type ReviewDecision = 'approve' | 'reject';
-let promptRl: Interface | null = null;
-let ttyFd: number | null = null;
-
-function normalizeStdinForPrompts() {
-    try {
-        if (input.isTTY) {
-            input.setRawMode?.(false);
-            input.resume();
-        }
-    } catch {
-        // Best effort.
-    }
-}
-
-function getPromptInterface(): Interface {
-    if (promptRl) return promptRl;
-
-    if (fs.existsSync('/dev/tty')) {
-        ttyFd = fs.openSync('/dev/tty', 'r+');
-        const ttyInput = fs.createReadStream('', { fd: ttyFd, autoClose: false });
-        const ttyOutput = fs.createWriteStream('', { fd: ttyFd, autoClose: false });
-        promptRl = createInterface({ input: ttyInput, output: ttyOutput, terminal: true });
-        return promptRl;
-    }
-
-    promptRl = createInterface({ input, output, terminal: true });
-    return promptRl;
-}
-
-function closePromptInterface() {
-    try {
-        promptRl?.close();
-    } catch {
-        // ignore
-    }
-    promptRl = null;
-    if (ttyFd !== null) {
-        try {
-            fs.closeSync(ttyFd);
-        } catch {
-            // ignore
-        }
-        ttyFd = null;
-    }
-}
-
-async function readLine(message: string): Promise<string | null> {
-    normalizeStdinForPrompts();
-    try {
-        const rl = getPromptInterface();
-        const answer = await rl.question(message);
-        return answer.trim();
-    } catch {
-        return null;
-    }
-}
-
-async function reviewCommand(command: string): Promise<{ decision: ReviewDecision; command: string }> {
-    log.message(chalk.dim('Review command before execution:'));
-    log.message(chalk.yellow(`  ${command}`));
-    log.message(chalk.dim('[a] Approve  [r] Reject'));
-
-    const choice = (await readLine('Choice (a/r): '))?.toLowerCase();
-    if (!choice || choice === 'r' || choice === 'reject') return { decision: 'reject', command };
-
-    return { decision: 'approve', command };
-}
-
-async function askToExecute(issue: CheckResult, command: string): Promise<{ action: 'execute' | 'skip' | 'cancel'; command: string }> {
-    log.message(chalk.yellow(`Proposed Command: ${command}`));
-    const review = await reviewCommand(command);
-
-    if (review.decision === 'reject') {
-        log.warn(`Rejected fix command for ${issue.id}.`);
-        return { action: 'skip', command };
-    }
-
-    return { action: 'execute', command: review.command };
-}
-
 async function askToRetry(): Promise<boolean> {
-    const answer = (await readLine('Command failed. Retry with AI analysis? [Y/n]: '))?.toLowerCase();
-    if (!answer) return true;
-    return answer !== 'n' && answer !== 'no';
+    // Automatically retry if a command fails
+    return true;
 }
 
 async function executeCommand(command: string, issueId: string): Promise<{ ok: boolean; errorOutput?: string }> {
@@ -135,14 +49,9 @@ async function processIssue(issue: CheckResult): Promise<FixOutcome> {
             return 'failed';
         }
 
-        const review = await askToExecute(issue, currentCommand);
-        if (review.action === 'cancel') return 'skipped';
-        if (review.action === 'skip') {
-            log.warn(`Skipped fixing ${issue.id}.`);
-            return 'skipped';
-        }
-
-        currentCommand = review.command;
+        // Auto-executing without manual review as requested by user
+        log.message(chalk.yellow(`Agent is auto-executing: ${currentCommand}`));
+        
         const result = await executeCommand(currentCommand, issue.id);
         if (result.ok) return 'fixed';
 
@@ -198,6 +107,6 @@ export async function runAgentFixer(failures: CheckResult[]) {
         );
         outro(chalk.bold.green('Agent finished all fix attempts! Run `dmx scan` again to verify.'));
     } finally {
-        closePromptInterface();
+        // clack cleans up its own listeners
     }
 }

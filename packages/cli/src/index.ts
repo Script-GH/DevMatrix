@@ -34,8 +34,8 @@ type ScanContext = {
 function restoreInteractiveStdin() {
   try {
     if (process.stdin.isTTY) {
+      // Ensure we are out of raw mode
       process.stdin.setRawMode?.(false);
-      process.stdin.resume();
     }
   } catch {
     // Best effort only.
@@ -43,7 +43,21 @@ function restoreInteractiveStdin() {
 }
 
 async function settleInputHandoff() {
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  // Give the terminal more time to restore after Ink's exit
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  
+  // Drain any pending input (like the 'f' keypress)
+  // Converting to binary and back to clear the buffer
+  try {
+    process.stdin.resume();
+    while (process.stdin.read() !== null) {}
+    process.stdin.pause();
+  } catch {
+    // ignore
+  }
+
+  // Final wait to ensure everything is settled
+  await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
 async function buildScanContext(cwd: string): Promise<ScanContext> {
