@@ -5,6 +5,28 @@ const GROQ_ENDPOINT = 'https://api.groq.com/openai/v1/chat/completions';
 const GROQ_TIMEOUT_MS = 15000;
 const GROQ_MAX_RETRIES = 2;
 
+const SYNC_SYSTEM_PROMPT = `
+You are DevPulse, an expert environment architect.
+You receive a JSON object containing:
+  - diff: { added: string[], updated: { name: string, oldVersion: string, newVersion: string }[], removed: string[] }
+  - localDeps: full map of current local versions
+  - targetDeps: full map of desired versions
+  - system: summary of installed runtimes and package managers (e.g., "pnpm available", "python 3.10 detected")
+
+Your task is to generate a list of shell commands to sync the local environment to the target state.
+For each action, return a JSON object with:
+  - id: A unique identifier for this action (e.g. "update:next").
+  - name: A short, descriptive title (e.g. "Update Next.js to 16.2.3").
+  - reasoning: Technical logic (e.g., "Updating package.json to match target project state").
+  - explanation: 1 sentence summary of the sync action.
+  - fixCommand: The exact shell command (e.g. "npm install x@1.2.3" or "sed -i ... requirements.txt").
+    - If a file needs editing (like Gemfile or requirements.txt), use standard non-interactive tools like 'sed', 'echo', or redirecting.
+    - If a package manager command exists (npm, pip, bundle), use it.
+  - risk: "safe" | "moderate" | "destructive"
+
+Return a JSON object with a "fixes" key containing the array of actions. No preamble, no markdown.
+`.trim();
+
 const SYSTEM_PROMPT = `
 You are DevPulse, an expert dev environment diagnostician.
 You receive a JSON array of environment check failures.
@@ -204,12 +226,14 @@ function normalizeFix(item: any): Partial<CheckResult> | null {
     : undefined;
 
   const reasoning = typeof item.reasoning === 'string' ? item.reasoning.trim() : undefined;
+  const name = typeof item.name === 'string' ? item.name.trim() : undefined;
   const risk = item.risk === 'safe' || item.risk === 'moderate' || item.risk === 'destructive'
     ? item.risk
     : 'moderate';
 
   return {
     id: item.id,
+    name,
     explanation,
     fixCommand,
     reasoning,
@@ -324,4 +348,48 @@ Output format (strict):
   if (!text) return "AI advice service is temporarily unreachable. Please retry in a moment.";
   const clean = compressAdvice(text);
   return clean || "No advice available at this time.";
+}
+export async function getSyncFixes(
+  diff: { added: string[], updated: { name: string, oldVersion: string, newVersion: string }[], removed: string[] },
+  localDeps: Record<string, string>,
+  targetDeps: Record<string, string>,
+  systemContext: string
+): Promise<Partial<CheckResult>[]> {
+  if (!getGroqApiKey()) return [];
+
+  const userPayload = JSON.stringify({
+    diff,
+    localDeps,
+    targetDeps,
+    system: systemContext
+  });
+
+  const text = await requestGroq(
+    [
+      { role: 'system', content: SYNC_SYSTEM_PROMPT },
+      { role: 'user', content: userPayload }
+    ],
+    'json_object'
+  );
+
+  if (!text) {
+    console.error('getSyncFixes: Groq returned no content.');
+    return [];
+  }
+
+  const parsed = parseJsonResponse<any>(text);
+  if (!parsed) {
+    console.error('getSyncFixes: Failed to parse JSON response:', text);
+    return [];
+  }
+
+  const rawItems = Array.isArray(parsed) ? parsed : (parsed.fixes || parsed.issues || []);
+  if (!Array.isArray(rawItems)) {
+    console.error('getSyncFixes: AI did not return a "fixes" array:', parsed);
+    return [];
+  }
+
+  return rawItems
+    .map(normalizeFix)
+    .filter((item): item is Partial<CheckResult> => item !== null);
 }
