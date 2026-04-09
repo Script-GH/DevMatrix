@@ -14,7 +14,7 @@ import { runAgentFixer } from './ai/AgentRunner.js';
 import { renderReport } from './render/TerminalUI.js';
 import { getAIFixes, getTechnicalAdvice } from './ai/AIAdvisor.js';
 import { HealthReport } from '@devpulse/shared';
-import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink, cmdRemoveProject } from './commands.js';
+import { cmdAddDev, cmdUpdateList, cmdUpdateOfficial, cmdUpdateFrom, cmdStatus, cmdLogsPush, cmdListDevs, cmdLink, cmdRemoveProject, cmdProjectInfo } from './commands.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.devpulse');
 const CONFIG_ENV_PATH = path.join(CONFIG_DIR, '.env');
@@ -73,6 +73,7 @@ function mergeAIFixesIntoChecks(checks: HealthReport['checks'], aiFixes: Partial
     target.explanation = fix.explanation;
     target.reasoning = fix.reasoning;
     target.fixCommand = fix.fixCommand;
+    target.manualSteps = fix.manualSteps;
     target.risk = fix.risk;
   }
 }
@@ -234,24 +235,14 @@ addCmd
 
 // ─── dmx update ──────────────────────────────────────────────────────────────
 
-const updateCmd = program
+program
   .command('update')
-  .description('Sync dependencies with the project or a team member');
-
-updateCmd
-  .command('list')
-  .description('Show packages that are out of sync with the official project state')
-  .action(async () => {
-    await cmdUpdateList();
-  });
-
-updateCmd
-  .command('[devName]')
-  .description(
-    'Apply official project versions (no arg) or a specific developer\'s versions'
-  )
+  .argument('[devName]', 'Apply official project versions (no arg) or a specific developer\'s versions')
+  .description('Sync dependencies with the project or a team member. Use "list" to see changes.')
   .action(async (devName?: string) => {
-    if (!devName) {
+    if (devName === 'list') {
+      await cmdUpdateList();
+    } else if (!devName) {
       await cmdUpdateOfficial();
     } else {
       await cmdUpdateFrom(devName);
@@ -291,6 +282,25 @@ listCmd
   .description('List all registered developers for the current project')
   .action(async () => {
     await cmdListDevs();
+  });
+
+// ─── dmx project ─────────────────────────────────────────────────────────────
+const projectCmd = program.command('project').description('Manage project-specific data');
+
+projectCmd
+  .command('info')
+  .description('Fetch project details and team list')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    await cmdProjectInfo(options);
+  });
+
+program
+  .command('project-info')
+  .description('Fetch project details and team list (alias for project info)')
+  .option('--json', 'Output as JSON')
+  .action(async (options) => {
+    await cmdProjectInfo(options);
   });
 
 // ─── dmx link ────────────────────────────────────────────────────────────────

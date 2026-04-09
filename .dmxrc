@@ -1,3 +1,22 @@
 {
-  "projectId": "proj-cwsxa"
+  "projectId": "proj-cwsxa",
+  "metadata": {
+    "updatedByName": "Rajath",
+    "lastUpdated": "2026-04-08T22:10:20.673+00:00"
+  },
+  "team": [
+    {
+      "id": "83d112f0-b76a-4258-8cd1-c1a542d5cd7b",
+      "name": "neera",
+      "lastActive": "2026-04-09T01:59:28.094+00:00",
+      "isMe": false
+    },
+    {
+      "id": "523cbeb2-9fd9-4f6e-86e1-7cc787eac004",
+      "name": "Rajath",
+      "lastActive": "2026-04-08T23:06:06.675+00:00",
+      "isMe": true
+    }
+  ],
+  "lastSynced": "2026-04-09T03:38:10.749Z"
 }

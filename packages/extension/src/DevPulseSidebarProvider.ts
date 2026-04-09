@@ -5,21 +5,28 @@ import * as fs from 'fs';
 
 export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
   _view?: vscode.WebviewView;
+  private _outputChannel: vscode.LogOutputChannel;
+  private _effectiveRoot?: string;
 
-  constructor(private readonly _extensionUri: vscode.Uri) {}
+  constructor(private readonly _extensionUri: vscode.Uri) {
+    this._outputChannel = vscode.window.createOutputChannel('DevPulse', { log: true });
+  }
 
   public resolveWebviewView(webviewView: vscode.WebviewView) {
     this._view = webviewView;
+    this._outputChannel.info('Webview resolved');
 
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [this._extensionUri],
     };
 
-    webviewView.webview.html = this._getHtmlForWebview();
-
     webviewView.webview.onDidReceiveMessage((data) => {
       switch (data.type) {
+        case 'ready':
+          this._outputChannel.info('Webview ready, triggering initial scan');
+          this.triggerScan();
+          break;
         case 'scan':
           this.triggerScan();
           break;
@@ -34,30 +41,41 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
           break;
       }
     });
-    
-    // Automatically scan on load if a workspace is open
-    setTimeout(() => {
-        if (vscode.workspace.workspaceFolders) {
-            this.triggerScan();
+
+    webviewView.webview.html = this._getHtmlForWebview();
+  }
+
+  private findConfig(rootPath: string): string | undefined {
+    // 1. Check Root
+    const rootConfig = path.join(rootPath, '.dmxrc');
+    if (fs.existsSync(rootConfig)) return rootConfig;
+
+    // 2. Check subdirectories (1 level deep)
+    try {
+        const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                const subConfig = path.join(rootPath, entry.name, '.dmxrc');
+                if (fs.existsSync(subConfig)) return subConfig;
+            }
         }
-    }, 1000);
+    } catch (e) {}
+
+    return undefined;
   }
 
   private resolveCliPath(): string | undefined {
-    // 1. Check user setting
     const config = vscode.workspace.getConfiguration('devpulse');
     const manualPath = config.get<string>('cliPath');
     if (manualPath && fs.existsSync(manualPath)) {
         return manualPath;
     }
 
-    // 2. Check development monorepo path
     const devPath = path.join(this._extensionUri.fsPath, '..', 'cli', 'dist', 'index.js');
     if (fs.existsSync(devPath)) {
         return devPath;
     }
 
-    // 3. Check bundled path (hypothetical structure for published extension)
     const bundledPath = path.join(this._extensionUri.fsPath, 'dist', 'cli', 'index.js');
     if (fs.existsSync(bundledPath)) {
         return bundledPath;
@@ -66,7 +84,7 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
     return undefined;
   }
 
-  public triggerScan() {
+  public async triggerScan() {
     if (!this._view) return;
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -75,70 +93,95 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
     }
     
     const rootPath = workspaceFolders[0].uri.fsPath;
-    this._view.webview.postMessage({ type: 'scanStarted' });
+    this._outputChannel.info(`Starting scan in: ${rootPath}`);
+
+    // PHASE 1: Instant Metadata Load
+    let projectInfo = null;
+    this._effectiveRoot = rootPath;
+
+    try {
+        const configPath = this.findConfig(rootPath);
+        if (configPath) {
+            this._effectiveRoot = path.dirname(configPath);
+            const content = fs.readFileSync(configPath, 'utf8');
+            const config = JSON.parse(content);
+            if (config.projectId) {
+                projectInfo = {
+                    initialized: true,
+                    projectId: config.projectId,
+                    officialState: config.metadata,
+                    team: config.team || []
+                };
+                this._outputChannel.info(`Found metadata at: ${configPath}`);
+                this._view.webview.postMessage({ type: 'scanComplete', report: null, projectInfo });
+            }
+        } else {
+            this._outputChannel.warn(`No .dmxrc found in ${rootPath} or subfolders`);
+        }
+    } catch (e) {
+        this._outputChannel.warn(`Failed to read config: ${e}`);
+    }
+
+    this._view.webview.postMessage({ type: 'scanStarted', hasMetadata: !!projectInfo });
 
     const cliEntry = this.resolveCliPath();
-    
     if (!cliEntry) {
-        const errorMsg = `DevPulse CLI not found. Please ensure it's built or set the path in settings.`;
-        vscode.window.showErrorMessage('DevPulse: CLI module missing.');
-        this._view?.webview.postMessage({ type: 'scanError', error: errorMsg, showSettings: true });
+        this._view?.webview.postMessage({ type: 'scanError', error: 'CLI not found', showSettings: true });
         return;
     }
 
-    // Try both node paths (windows / linux)
-    exec(`node "${cliEntry}" scan --json`, { cwd: rootPath }, (error, stdout, stderr) => {
-        if (error) {
-            console.error('Scan error:', error);
-            vscode.window.showErrorMessage('DevPulse: Scan failed to run');
-            this._view?.webview.postMessage({ type: 'scanError', error: error.message });
-            return;
+    const runCli = (cmd: string): Promise<string> => {
+        return new Promise((resolve) => {
+            exec(`node "${cliEntry}" ${cmd} --json`, { cwd: this._effectiveRoot, timeout: 60000 }, (error, stdout) => {
+                resolve(stdout || '');
+            });
+        });
+    };
+
+    try {
+        // PHASE 2: Live Health Scan & Background Metadata Refresh
+        const [scanResult] = await Promise.allSettled([
+            runCli('scan'),
+            runCli('project-info')
+        ]);
+
+        let report = null;
+        if (scanResult.status === 'fulfilled') {
+            try {
+                const stdout = scanResult.value;
+                const jsonStart = stdout.indexOf('{');
+                const jsonEnd = stdout.lastIndexOf('}');
+                if (jsonStart !== -1 && jsonEnd !== -1) {
+                    report = JSON.parse(stdout.substring(jsonStart, jsonEnd + 1));
+                }
+            } catch (e) {}
         }
-        
-        try {
-            // Find the JSON part in case there's extra output
-            const jsonStart = stdout.indexOf('{');
-            const jsonEnd = stdout.lastIndexOf('}');
-            if (jsonStart === -1 || jsonEnd === -1) {
-                throw new Error('No JSON object found in output');
-            }
-            const rawJson = stdout.substring(jsonStart, jsonEnd + 1);
-            const report = JSON.parse(rawJson);
-            this._view?.webview.postMessage({ type: 'scanComplete', report });
-        } catch (e) {
-            console.error('Failed to parse scan output', e);
-            console.log('Output was:', stdout);
-            vscode.window.showErrorMessage('DevPulse: Failed to parse diagnostics from CLI');
-            this._view?.webview.postMessage({ type: 'scanError', error: 'Invalid JSON' });
+
+        if (report) {
+            this._view?.webview.postMessage({ type: 'scanComplete', report, projectInfo });
+            this._outputChannel.info('Scan complete');
+        } else if (projectInfo) {
+            // If scan failed but we have metadata, stay on metadata view
+            this._view?.webview.postMessage({ type: 'scanComplete', report: null, projectInfo });
+        } else {
+            this._view?.webview.postMessage({ type: 'scanError', error: 'Scan failed' });
         }
-    });
+    } catch (err: any) {
+        this._view?.webview.postMessage({ type: 'scanError', error: err.message });
+    }
   }
 
   public triggerAdvice() {
     if (!this._view) return;
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-        vscode.window.showErrorMessage('DevPulse: No workspace folder open');
-        return;
-    }
+    const workingDir = this._effectiveRoot || vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+    if (!workingDir) return;
     
-    const rootPath = workspaceFolders[0].uri.fsPath;
     this._view.webview.postMessage({ type: 'adviceStarted' });
 
     const cliEntry = this.resolveCliPath();
-    
-    if (!cliEntry) {
-        vscode.window.showErrorMessage('DevPulse: CLI module missing.');
-        this._view?.webview.postMessage({ type: 'scanError', error: 'CLI module missing.', showSettings: true });
-        return;
-    }
+    if (!cliEntry) return;
 
-    // Call dmx advice --raw (we'll implement --raw in CLI next)
-    exec(`node "${cliEntry}" advice --raw`, { cwd: rootPath }, (error, stdout, stderr) => {
-        if (error) {
-           console.error('Advice error:', error);
-           // Not treating as fatal because it still might yield something, or API key missing
-        }
+    exec(`node "${cliEntry}" advice --raw`, { cwd: workingDir }, (error, stdout) => {
         this._view?.webview.postMessage({ type: 'adviceComplete', advice: stdout.trim() || 'No advice returned.' });
     });
   }
@@ -149,147 +192,273 @@ export class DevPulseSidebarProvider implements vscode.WebviewViewProvider {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DevPulse Dashboard</title>
+    <title>DMX Pulse</title>
     <style>
+        :root {
+            --bg-base: #0a0a0a;
+            --bg-card: #141414;
+            --fg-base: #ededed;
+            --fg-dim: #9ca3af;
+            --accent-primary: #3b82f6;
+            --accent-success: #10b981;
+            --accent-warning: #fbbf24;
+            --accent-error: #ef4444;
+            --border-muted: rgba(255, 255, 255, 0.08);
+            --glass: rgba(255, 255, 255, 0.03);
+        }
+
         body {
-            font-family: var(--vscode-font-family);
-            padding: 16px;
-            color: var(--vscode-editor-foreground);
-            background-color: var(--vscode-editor-background);
+            font-family: system-ui, -apple-system, sans-serif;
+            padding: 0; margin: 0;
+            color: var(--fg-base);
+            background-color: var(--bg-base);
             line-height: 1.5;
         }
-        .container { display: flex; flex-direction: column; gap: 20px; }
-        .gauge-container { display: flex; align-items: center; justify-content: center; padding: 20px 0; }
-        .circular-chart { display: block; margin: 0 auto; max-width: 140px; max-height: 140px; }
-        .circle-bg { fill: none; stroke: var(--vscode-editorSuggestWidget-background); stroke-width: 2.5; }
-        .circle { fill: none; stroke-width: 2.5; stroke-linecap: round; transition: stroke-dasharray 1s ease-out; }
-        .circle.good { stroke: var(--vscode-testing-iconPassed); }
-        .circle.warning { stroke: var(--vscode-list-warningForeground); }
-        .circle.critical { stroke: var(--vscode-testing-iconFailed); }
-        .percentage { fill: var(--vscode-editor-foreground); font-family: inherit; font-size: 8px; font-weight: 600; text-anchor: middle; }
-        h3 { font-size: 11px; text-transform: uppercase; color: var(--vscode-descriptionForeground); margin: 0 0 10px 0; border-bottom: 1px solid var(--vscode-widget-border); padding-bottom: 4px; }
-        .check-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; }
-        .icon-svg { width: 14px; height: 14px; }
-        .icon-passed { color: var(--vscode-testing-iconPassed); }
-        .icon-warning { color: var(--vscode-list-warningForeground); }
-        .icon-critical { color: var(--vscode-testing-iconFailed); }
-        .check-details { flex: 1; display: flex; flex-direction: column; }
-        .check-name { font-weight: 500; }
-        .check-found { font-size: 11px; color: var(--vscode-descriptionForeground); }
-        .action-button { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; background-color: transparent; color: var(--vscode-button-foreground); border: 1px solid var(--vscode-button-border, var(--vscode-focusBorder)); border-radius: 2px; cursor: pointer; font-size: 12px; width: 100%; margin-top: 5px; }
-        .action-button:hover { background-color: var(--vscode-button-hoverBackground); }
-        .action-button.primary { background-color: var(--vscode-button-background); border: none; }
-        .button-group { display: flex; gap: 10px; margin-top: 10px; }
-        .loader { text-align: center; color: var(--vscode-descriptionForeground); margin-top: 20px; }
-        .ai-fix { margin-top: 8px; padding: 10px; background-color: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textLink-foreground); font-size: 12px; }
-        .ai-fix-title { font-weight: bold; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
-        .ai-fix-command { background-color: var(--vscode-textCodeBlock-background); padding: 4px 8px; border-radius: 4px; font-family: monospace; display: flex; justify-content: space-between; align-items: center; margin-top: 8px; border: 1px solid var(--vscode-widget-border); }
-        .ai-fix-command code { word-break: break-all; }
-        .copy-btn { background: transparent; border: 1px solid var(--vscode-button-border); color: var(--vscode-button-foreground); cursor: pointer; padding: 2px 6px; border-radius: 2px; font-size: 10px; }
-        .copy-btn:hover { background-color: var(--vscode-button-hoverBackground); }
-        .advice-box { margin-top: 20px; padding: 12px; background-color: var(--vscode-textBlockQuote-background); border: 1px solid var(--vscode-widget-border); border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+
+        .layout { padding: 16px; display: flex; flex-direction: column; gap: 24px; }
+        
+        .project-badge {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e1b4b 100%);
+            padding: 12px 16px; border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .project-id { font-size: 10px; font-weight: 700; text-transform: uppercase; color: rgba(255, 255, 255, 0.5); }
+        .project-name { font-size: 17px; font-weight: 700; margin-top: 4px; color: #fff; }
+
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border-muted);
+            border-radius: 16px; padding: 20px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, transparent 100%);
+        }
+
+        .gauge-section { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        .gauge-container { width: 140px; height: 140px; position: relative; }
+        .circular-chart { display: block; }
+        .circle-bg { fill: none; stroke: rgba(255,255,255,0.03); stroke-width: 3.5; }
+        .circle { 
+            fill: none; stroke-width: 3.5; stroke-linecap: round; 
+            transition: stroke-dasharray 1s ease;
+        }
+        .circle.good { stroke: var(--accent-success); }
+        .circle.warning { stroke: var(--accent-warning); }
+        .circle.critical { stroke: var(--accent-error); }
+        .circle.dimmed { stroke: rgba(255,255,255,0.1); }
+        
+        .percentage { 
+            fill: #fff; font-size: 8px; font-weight: 800; 
+            text-anchor: middle; dominant-baseline: middle;
+        }
+        .score-label { font-size: 13px; font-weight: 600; color: var(--fg-dim); }
+
+        h3 { 
+            font-size: 11px; font-weight: 800; text-transform: uppercase; 
+            letter-spacing: 0.1em; color: var(--fg-dim); 
+            margin: 0 0 16px 0; display: flex; align-items: center; gap: 10px; 
+        }
+        h3::after { content: ''; flex: 1; height: 1px; background: var(--border-muted); }
+
+        .team-list { display: flex; flex-direction: column; gap: 12px; }
+        .team-member {
+            display: flex; align-items: center; gap: 14px;
+            padding: 10px 12px; border-radius: 10px;
+            background: var(--glass);
+        }
+        .avatar {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: #222; display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 700; color: var(--accent-primary);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .member-info { flex: 1; display: flex; flex-direction: column; }
+        .member-name { font-size: 14px; font-weight: 600; color: #fff; }
+        .member-status { font-size: 11px; color: var(--fg-dim); }
+        .presence-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-success); box-shadow: 0 0 10px var(--accent-success); }
+
+        .check-item { 
+            display: flex; gap: 14px; padding: 14px; 
+            background: var(--glass); border-radius: 12px; 
+            border: 1px solid var(--border-muted); margin-bottom: 12px;
+        }
+        .icon { width: 20px; height: 20px; flex-shrink: 0; }
+        .icon-passed { color: var(--accent-success); }
+        .icon-warning { color: var(--accent-warning); }
+        .icon-critical { color: var(--accent-error); }
+        
+        .check-content { flex: 1; }
+        .check-title { font-size: 14px; font-weight: 600; color: #fff; }
+        .check-meta { font-size: 11px; color: var(--fg-dim); margin-top: 2px; }
+
+        .ai-box {
+            margin-top: 12px; padding: 12px;
+            background: rgba(59, 130, 246, 0.08);
+            border-left: 3px solid var(--accent-primary);
+            border-radius: 6px; font-size: 12px;
+        }
+        .ai-label { font-weight: 700; color: var(--accent-primary); margin-bottom: 8px; }
+        .code-block {
+            background: #000; padding: 10px; border-radius: 6px;
+            font-family: monospace; font-size: 11px;
+            margin-top: 10px; border: 1px solid rgba(255,255,255,0.1);
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .copy-btn { 
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            color: var(--fg-base); cursor: pointer; padding: 4px 8px; font-size: 10px; 
+            border-radius: 4px;
+        }
+
+        .button-group { display: flex; gap: 10px; width: 100%; margin-top: 16px; }
+        .btn {
+            flex: 1; padding: 10px 16px; border-radius: 8px;
+            font-size: 13px; font-weight: 700; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            border: 1px solid transparent;
+        }
+        .btn-primary { background: var(--accent-primary); color: #fff; }
+        .btn-ghost { background: var(--glass); border-color: var(--border-muted); color: var(--fg-base); }
+
+        .loader-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 20px; color: var(--fg-dim); }
+        .spinner { 
+            width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.05); 
+            border-top-color: var(--accent-primary); border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Advice Modal Styles */
+        .overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+            backdrop-filter: blur(8px); display: none;
+            flex-direction: column; padding: 24px; z-index: 1000;
+            animation: fadeIn 0.3s ease;
+        }
+        .overlay.active { display: flex; }
+        .overlay-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .overlay-title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .overlay-body { 
+            flex: 1; overflow-y: auto; padding: 16px; 
+            background: rgba(255,255,255,0.03); border-radius: 12px;
+            font-size: 14px; white-space: pre-wrap; font-family: 'Inter', sans-serif;
+            border: 1px solid var(--border-muted); line-height: 1.6;
+        }
+        .close-btn { background: var(--glass); border: 1px solid var(--border-muted); color: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
 </head>
 <body>
-    <div id="content"><div class="loader">Loading DevPulse...</div></div>
+    <div id="content">
+        <div class="loader-wrap">
+            <div class="spinner"></div>
+            <span>Syncing Pulse...</span>
+        </div>
+    </div>
+    <div id="advice-overlay" class="overlay">
+        <div class="overlay-header">
+            <div class="overlay-title">✨ AI Project Advice</div>
+            <button class="close-btn" onclick="closeAdvice()">Close</button>
+        </div>
+        <div id="advice-content" class="overlay-body"></div>
+    </div>
+    <div style="position: fixed; bottom: 8px; right: 8px; font-size: 9px; opacity: 0.2; pointer-events: none;">v2.2</div>
     <script>
         const vscode = acquireVsCodeApi();
-        
         function getIcon(passed, severity) {
-            if (passed) return '<svg class="icon-svg icon-passed" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
-            if (severity === 'critical') return '<svg class="icon-svg icon-critical" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
-            return '<svg class="icon-svg icon-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>';
+            const cls = passed ? 'icon-passed' : (severity === 'critical' ? 'icon-critical' : 'icon-warning');
+            const path = passed ? 'M5 13l4 4L19 7' : 'M6 18L18 6M6 6l12 12';
+            return \`<svg class="icon \${cls}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="\${path}"></path></svg>\`;
         }
-
+        
         window.addEventListener('message', event => {
             const message = event.data;
+            console.log('Received message:', message.type);
+            
             if (message.type === 'scanStarted') {
-                document.getElementById('content').innerHTML = '<div class="loader">Scanning workspace...</div>';
-            } else if (message.type === 'adviceStarted') {
-                const oldContent = document.getElementById('content').innerHTML;
-                document.getElementById('content').innerHTML = '<div class="loader">Gathering AI advice...</div>' + oldContent.replace(/<div class="loader">.*?<\\/div>/, '');
-            } else if (message.type === 'scanError') {
-                let html = '<div style="color:var(--vscode-errorForeground); margin-bottom: 20px;">Error: ' + message.error + '</div>';
-                if (message.showSettings) {
-                    html += '<button class="action-button primary" onclick="vscode.postMessage({type: \\'openSettings\\'})">Configure CLI Path</button>';
+                const content = document.getElementById('content');
+                if (!message.hasMetadata && !content.querySelector('.layout')) {
+                    content.innerHTML = '<div class="loader-wrap"><div class="spinner"></div><span>Scanning Environment...</span></div>';
                 }
-                document.getElementById('content').innerHTML = html;
             } else if (message.type === 'scanComplete') {
-                window.lastReport = message.report;
-                renderReport(message.report);
+                renderDashboard(message.report, message.projectInfo);
+            } else if (message.type === 'adviceStarted') {
+                showAdvice('Generating AI insights for your architecture...');
             } else if (message.type === 'adviceComplete') {
-                if (window.lastReport) {
-                    renderReport(window.lastReport, message.advice);
-                }
+                showAdvice(message.advice);
             }
         });
 
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                vscode.postMessage({type: 'onInfo', value: 'Fix command copied!'});
-            });
+        function showAdvice(text) {
+            document.getElementById('advice-content').innerText = text;
+            document.getElementById('advice-overlay').classList.add('active');
         }
 
-        function renderReport(report, adviceText = null) {
-            const dashArray = ((report.score / 100) * 100) + ", 100";
-            const circleClass = report.score >= 80 ? 'good' : report.score >= 50 ? 'warning' : 'critical';
+        function closeAdvice() {
+            document.getElementById('advice-overlay').classList.remove('active');
+        }
 
-            let html = '<div class="container">' +
-                '<div class="gauge-container">' +
-                '<svg viewBox="0 0 36 36" class="circular-chart">' +
-                '<path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>' +
-                '<path class="circle ' + circleClass + '" stroke-dasharray="' + dashArray + '" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>' +
-                '<text x="18" y="20.35" class="percentage">' + report.score + '%</text>' +
-                '</svg></div>' +
-                '<div class="button-group">' +
-                '<button class="action-button primary" onclick="vscode.postMessage({type: \\'scan\\'})">Rescan</button>' +
-                '<button class="action-button" onclick="vscode.postMessage({type: \\'onAdvice\\'})">Ask AI</button>' +
-                '</div>';
+        function renderDashboard(report, project) {
+            const hasReport = !!report;
+            const score = hasReport ? report.score : 0;
+            const dashArray = \`\${(score / 100) * 100}, 100\`;
+            const colorClass = hasReport ? (score >= 80 ? 'good' : score >= 50 ? 'warning' : 'critical') : 'dimmed';
 
-            if (adviceText) {
-                html += '<div class="advice-box"><strong>Architectural Advice</strong><br><br>' + adviceText.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
+            let html = '<div class="layout">';
+            if (project && project.projectId) {
+                html += \`<div class="project-badge"><div class="project-id">Connected Project</div><div class="project-name">\${project.projectId}</div></div>\`;
             }
 
-            const sections = [
-                { title: 'Runtimes & Tooling', items: report.checks.filter(c => ['runtime', 'package_manager', 'tool'].includes(c.category)) },
-                { title: 'Environment Variables', items: report.checks.filter(c => c.category === 'env_var') },
-                { title: 'Configuration', items: report.checks.filter(c => c.category === 'config') }
-            ];
+            html += \`<div class="card gauge-section">
+                <div class="gauge-container">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <path class="circle \${colorClass}" stroke-dasharray="\${dashArray}" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <text x="18" y="20.35" class="percentage">\${hasReport ? score + '%' : '...'}</text>
+                    </svg>
+                </div>
+                <div class="score-label">\${hasReport ? 'Environment Health' : 'Scanning Deep Health...'}</div>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="vscode.postMessage({type:'scan'})">Rescan</button>
+                    <button class="btn btn-ghost" onclick="vscode.postMessage({type:'onAdvice'})">Ask AI</button>
+                </div>
+            </div>\`;
 
-            sections.forEach(sec => {
-                if (sec.items.length === 0) return;
-                html += '<div><h3>' + sec.title + '</h3>';
-                sec.items.forEach(c => {
-                    const reqStr = c.required ? ' &middot; Req: ' + c.required : '';
-                    const foundStr = c.found ? 'Found ' + c.found : 'Missing';
-                    html += '<div class="check-item">' +
-                        '<div class="icon-container">' + getIcon(c.passed, c.severity) + '</div>' +
-                        '<div class="check-details">' +
-                        '<span class="check-name">' + c.name + '</span>' +
-                        '<span class="check-found">' + foundStr + reqStr + '</span>';
-                    
+            if (project && project.team) {
+                html += '<div><h3>Team Pulse</h3><div class="team-list">';
+                project.team.forEach(dev => {
+                    const initials = dev.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+                    html += \`<div class="team-member">
+                        <div class="avatar">\${initials}</div>
+                        <div class="member-info"><span class="member-name">\${dev.name}</span><span class="member-status">\${dev.lastActive || 'Online'}</span></div>
+                        <div class="presence-pulse"></div>
+                    </div>\`;
+                });
+                html += '</div></div>';
+            }
+
+            if (hasReport) {
+                html += '<div><h3>Diagnostics</h3>';
+                report.checks.forEach(c => {
+                    let aiBox = '';
                     if (!c.passed && c.fixCommand) {
-                        const escapedCmd = c.fixCommand.replace(/'/g, "\\\\'");
-                        html += '<div class="ai-fix">' +
-                                '<div class="ai-fix-title">✨ AI Fix Recommendation</div>' +
-                                '<div>' + (c.explanation || '') + '</div>' +
-                                '<div class="ai-fix-command">' +
-                                '<code>' + c.fixCommand + '</code>' +
-                                '<button class="copy-btn" onclick="copyToClipboard(\\\'' + escapedCmd + '\\\')">Copy</button>' +
-                                '</div>' +
-                                '</div>';
-                    } else if (!c.passed && c.explanation) {
-                        html += '<div class="ai-fix"><div class="ai-fix-title">✨ AI Note</div><div>' + c.explanation + '</div></div>';
+                        aiBox = \`<div class="ai-box">
+                            <div class="ai-label">✨ Fix Strategy</div>
+                            <div class="code-block"><code>\${c.fixCommand}</code></div>
+                        </div>\`;
                     }
-
-                    html += '</div></div>';
+                    html += \`<div class="check-item">
+                        \${getIcon(c.passed, c.severity)}
+                        <div class="check-content">
+                            <div class="check-title">\${c.name}</div>
+                            <div class="check-meta">\${c.found || 'Missing'}</div>
+                            \${aiBox}
+                        </div>
+                    </div>\`;
                 });
                 html += '</div>';
-            });
-
+            }
             html += '</div>';
             document.getElementById('content').innerHTML = html;
         }
+        vscode.postMessage({ type: 'ready' });
     </script>
 </body>
 </html>`;

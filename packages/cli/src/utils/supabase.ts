@@ -288,7 +288,6 @@ export async function createNotification(
     project_id: projectId,
     message: payload.message,
     changes: payload.changes,
-    triggered_by: payload.triggeredBy,
     created_at: new Date().toISOString(),
   });
   if (error) throw new Error(`createNotification: ${error.message}`);

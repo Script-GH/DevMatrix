@@ -22,6 +22,9 @@ import semver from 'semver';
 import { readLocalConfig, writeLocalConfig, LocalConfig, writeProjectConfig, deleteProjectConfig } from './utils/config.js';
 import { maskEnvVariables } from './utils/env.js';
 import { getDependencyDiff } from './engine/DiffEngine.js';
+import { getSyncFixes } from './ai/AIAdvisor.js';
+import { runAgentFixer } from './ai/AgentRunner.js';
+import { probeSystem } from './scanner/SystemProber.js';
 import type { DependencyDiff } from './engine/DiffEngine.js';
 import { detectStack, requirementsToDependencyMap } from './scanner/StackDetector.js';
 import type { DependencyMap } from './scanner/StackDetector.js';
@@ -175,7 +178,11 @@ export async function cmdAddDev(projectId: string): Promise<void> {
     });
 
     // 2. Save project ID locally to the current directory
+    const { writeProjectConfig } = await import('./utils/config.js');
     await writeProjectConfig({ projectId });
+
+    // 3. Refresh and persist full project metadata (team, names) immediately
+    await cmdProjectInfo({ json: true });
 
     // 3. Push initial version snapshot if this is a fresh join
     if (isNew) {
@@ -211,7 +218,7 @@ export async function cmdAddDev(projectId: string): Promise<void> {
 // ─── dmx update list ─────────────────────────────────────────────────────────
 
 /**
- * Fetches the OFFICIAL project latest state from Firestore and reports
+ * Fetches the OFFICIAL project latest state from Supabase and reports
  * which packages you are out of sync with. Does NOT push anything.
  */
 export async function cmdUpdateList(): Promise<void> {
@@ -251,7 +258,7 @@ export async function cmdUpdateList(): Promise<void> {
       console.log(
         chalk.dim(`  Official state last updated: ${
           officialState.lastUpdated
-            ? new Date((officialState.lastUpdated as any).toDate()).toLocaleString()
+            ? new Date(officialState.lastUpdated as any).toLocaleString()
             : 'unknown'
         }`)
       );
@@ -290,10 +297,11 @@ export async function cmdUpdateOfficial(): Promise<void> {
       return;
     }
 
-    s.stop(`Applying ${chalk.bold('official')} project dependencies…`);
-    await applyDepsToPackageJson(cwd, officialState.dependencies, 'Official Project');
+    const localDeps = await scanLocalDeps(cwd);
+    s.stop(`Analyzing sync path for ${chalk.bold('official')} project dependencies…`);
+    await applyDependenciesWithAI(cwd, localDeps, officialState.dependencies, 'Official Project');
 
-    // Update own Firestore doc to reflect the sync
+    // Update own Supabase doc to reflect the sync
     const newDeps = await scanLocalDeps(cwd);
     await upsertDeveloper(projectId, devId, {
       name: config.name ?? os.userInfo().username,
@@ -333,9 +341,10 @@ export async function cmdUpdateFrom(devName: string): Promise<void> {
     }
 
     const sourceLabel = dev.data.name;
-    s.stop(`Applying versions from ${chalk.cyan(sourceLabel)}…`);
+    const localDeps = await scanLocalDeps(cwd);
+    s.stop(`Analyzing sync path from ${chalk.cyan(sourceLabel)}…`);
 
-    await applyDepsToPackageJson(cwd, dev.data.dependencies, sourceLabel);
+    await applyDependenciesWithAI(cwd, localDeps, dev.data.dependencies, sourceLabel);
 
     // Sync env keys (append missing, leave values blank)
     const remoteEnvKeys = Object.keys(dev.data.env ?? {});
@@ -343,7 +352,7 @@ export async function cmdUpdateFrom(devName: string): Promise<void> {
       await syncEnvKeys(cwd, remoteEnvKeys, sourceLabel);
     }
 
-    // Update own Firestore doc
+    // Update own Supabase doc
     const newDeps = await scanLocalDeps(cwd);
     await upsertDeveloper(projectId, devId, {
       name: config.name ?? os.userInfo().username,
@@ -486,7 +495,7 @@ export async function cmdStatus(): Promise<void> {
 /**
  * Captures the current dependency snapshot, computes what changed since
  * the last recorded snapshot, and stores the diff + full map to the
- * developer's version timeline in Firestore.
+ * developer's version timeline in Supabase.
  *
  * This is a VERSION CHANGE TIMELINE — not a text/scan log.
  * After pushing, it also promotes the state as the new Official Project Latest.
@@ -503,7 +512,7 @@ export async function cmdLogsPush(): Promise<void> {
 
     const [currentDeps, env] = await Promise.all([scanLocalDeps(cwd), collectEnvSnapshot(cwd)]);
 
-    // Get last known state for this developer from Firestore to compute diff
+    // Get last known state for this developer from Supabase to compute diff
     const storedDev = await getDeveloper(projectId, devId).catch(() => null);
     const previousDeps: DependencyMap = storedDev?.data.dependencies ?? {};
 
@@ -547,6 +556,10 @@ export async function cmdLogsPush(): Promise<void> {
     });
 
     s.stop(chalk.green('Version snapshot pushed.'));
+
+    // Update metadata (team members, etc) in background
+    // Update metadata (team members, etc) in background quietly
+    cmdProjectInfo({ silent: true }).catch(() => {});
 
     console.log('');
     log.info(chalk.bold('Changes recorded in this snapshot:'));
@@ -600,64 +613,49 @@ export async function cmdListDevs(): Promise<void> {
   }
 }
 
-// ─── Internal: apply remote deps to package.json ─────────────────────────────
-
-async function applyDepsToPackageJson(
+async function applyDependenciesWithAI(
   cwd: string,
-  remoteDeps: DependencyMap,
+  localDeps: DependencyMap,
+  targetDeps: DependencyMap,
   sourceLabel: string
 ): Promise<void> {
-  const pkgPath = path.join(cwd, 'package.json');
-  let pkg: any;
-  try {
-    pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-  } catch {
-    log.error('Cannot read package.json in the current directory.');
-    process.exit(1);
-  }
+  const diff = getDependencyDiff(localDeps, targetDeps);
+  const hasChanges = diff.added.length || diff.updated.length || diff.removed.length;
 
-  // Only diff/apply npm-level keys — strip runtime:, pip:, env:, tool: prefixes
-  const remoteNpmDeps = extractNpmDeps(remoteDeps);
-  const localDeps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-  const diff = getDependencyDiff(localDeps, remoteNpmDeps);
-  const hasNodeChanges = diff.added.length || diff.updated.length || diff.removed.length;
-
-  if (!hasNodeChanges) {
-    log.info(chalk.dim(`Already in sync with ${sourceLabel}. No changes applied.`));
+  if (!hasChanges) {
+    log.info(chalk.dim(`Already in sync with ${sourceLabel}. No changes needed.`));
     return;
   }
 
-  printDiff(diff);
-
-  // Apply changes to correct section (dep or devDep)
-  for (const name of diff.added) {
-    if (remoteNpmDeps[name]) {
-      pkg.dependencies = pkg.dependencies ?? {};
-      pkg.dependencies[name] = remoteNpmDeps[name];
-    }
-  }
-  for (const { name, newVersion } of diff.updated) {
-    if (pkg.dependencies?.[name]) pkg.dependencies[name] = newVersion;
-    else if (pkg.devDependencies?.[name]) pkg.devDependencies[name] = newVersion;
-  }
-  for (const name of diff.removed) {
-    delete pkg.dependencies?.[name];
-    delete pkg.devDependencies?.[name];
-  }
-
-  await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-  log.info(chalk.cyan('package.json updated. Running npm install…'));
-
   const s = spinner();
-  s.start('npm install');
+  s.start('Consulting Groq AI for an expert sync plan...');
+
   try {
-    await execa('npm', ['install'], { cwd, stdio: 'pipe' });
-    s.stop(chalk.green('npm install complete.'));
+    // 1. Gather system context (package managers, runtimes)
+    const system = await probeSystem(cwd);
+    const systemSummary = Object.entries(system)
+      .filter(([_, v]) => (v as any).found)
+      .map(([k, v]) => `${k} ${(v as any).version || ''}`)
+      .join(', ');
+
+    // 2. Get the fix plan from AI
+    const fixes = await getSyncFixes(diff, localDeps, targetDeps, systemSummary);
+    s.stop('Sync plan generated.');
+
+    if (fixes.length === 0) {
+      log.warn('AI could not generate a safe sync plan. Please check the diff and update manually.');
+      printDiff(diff);
+      return;
+    }
+
+    // 3. Hand over to the Agent Runner for execution
+    await runAgentFixer(fixes as any);
   } catch (err: any) {
-    s.stop(chalk.red('npm install failed.'));
-    log.warn(err.message);
+    s.stop(chalk.red('Failed to generate sync plan.'));
+    log.error(err.message);
   }
 }
+
 
 async function syncEnvKeys(
   cwd: string,
@@ -753,3 +751,87 @@ export async function cmdRemoveProject(): Promise<void> {
   }
 }
 
+// ─── dmx project info ────────────────────────────────────────────────────────
+
+/**
+ * Returns structured project information (name, official state, team members).
+ */
+export async function cmdProjectInfo(options: { json?: boolean; silent?: boolean }): Promise<void> {
+  try {
+    const config = await readLocalConfig();
+    const { projectId } = config;
+
+    if (!projectId) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: 'Project not initialized', initialized: false }));
+      } else {
+        log.error('No project configured in this directory.');
+      }
+      return;
+    }
+
+    const [officialState, developers] = await Promise.all([
+      getProjectLatestUpdate(projectId),
+      getAllDevelopers(projectId),
+    ]);
+
+    const metadata = officialState ? {
+      updatedByName: officialState.updatedByName,
+      lastUpdated: officialState.lastUpdated,
+    } : undefined;
+
+    const team = developers.map(d => ({
+      id: d.id,
+      name: d.data.name,
+      lastActive: d.data.last_active,
+      isMe: d.id === config.devId
+    }));
+
+    const result = {
+      initialized: true,
+      projectId,
+      officialState: metadata,
+      team
+    };
+
+    // PERSISTENCE: Save retrieved metadata to local config for the extension
+    // We only write IF data has changed to avoid infinite scan loops from file watchers
+    const hasMetadataChanged = JSON.stringify(config.metadata) !== JSON.stringify(metadata);
+    const hasTeamChanged = JSON.stringify(config.team) !== JSON.stringify(team);
+
+    if (hasMetadataChanged || hasTeamChanged) {
+        const { writeProjectConfig } = await import('./utils/config.js');
+        await writeProjectConfig({
+            projectId,
+            metadata,
+            team,
+            lastSynced: new Date().toISOString()
+        });
+    }
+
+    if (options.json && !options.silent) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (!options.silent) {
+      console.log(chalk.bold.white(`\n  Project: ${projectId}`));
+      console.log(chalk.dim(`  Team size: ${developers.length} developer(s)\n`));
+      
+      if (officialState) {
+        console.log(chalk.blue(`  Official state last updated by ${officialState.updatedByName}`));
+      }
+
+      console.log(chalk.bold.cyan('\n  Team Members:'));
+      developers.forEach(({ data, id }) => {
+        const isMe = id === config.devId;
+        console.log(`  - ${data.name}${isMe ? chalk.green(' (you)') : ''} ${chalk.dim(`[${id.slice(0, 8)}]`)}`);
+      });
+      console.log('');
+    }
+  } catch (err: any) {
+    if (options.json) {
+      console.log(JSON.stringify({ error: err.message }));
+    } else {
+      log.error(`Failed to fetch project info: ${err.message}`);
+    }
+    process.exit(1);
+  }
+}
