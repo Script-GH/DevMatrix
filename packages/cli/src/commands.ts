@@ -558,7 +558,8 @@ export async function cmdLogsPush(): Promise<void> {
     s.stop(chalk.green('Version snapshot pushed.'));
 
     // Update metadata (team members, etc) in background
-    cmdProjectInfo({ json: true }).catch(() => {});
+    // Update metadata (team members, etc) in background quietly
+    cmdProjectInfo({ silent: true }).catch(() => {});
 
     console.log('');
     log.info(chalk.bold('Changes recorded in this snapshot:'));
@@ -755,7 +756,7 @@ export async function cmdRemoveProject(): Promise<void> {
 /**
  * Returns structured project information (name, official state, team members).
  */
-export async function cmdProjectInfo(options: { json?: boolean }): Promise<void> {
+export async function cmdProjectInfo(options: { json?: boolean; silent?: boolean }): Promise<void> {
   try {
     const config = await readLocalConfig();
     const { projectId } = config;
@@ -794,17 +795,23 @@ export async function cmdProjectInfo(options: { json?: boolean }): Promise<void>
     };
 
     // PERSISTENCE: Save retrieved metadata to local config for the extension
-    const { writeProjectConfig } = await import('./utils/config.js');
-    await writeProjectConfig({
-        projectId,
-        metadata,
-        team,
-        lastSynced: new Date().toISOString()
-    });
+    // We only write IF data has changed to avoid infinite scan loops from file watchers
+    const hasMetadataChanged = JSON.stringify(config.metadata) !== JSON.stringify(metadata);
+    const hasTeamChanged = JSON.stringify(config.team) !== JSON.stringify(team);
 
-    if (options.json) {
+    if (hasMetadataChanged || hasTeamChanged) {
+        const { writeProjectConfig } = await import('./utils/config.js');
+        await writeProjectConfig({
+            projectId,
+            metadata,
+            team,
+            lastSynced: new Date().toISOString()
+        });
+    }
+
+    if (options.json && !options.silent) {
       console.log(JSON.stringify(result, null, 2));
-    } else {
+    } else if (!options.silent) {
       console.log(chalk.bold.white(`\n  Project: ${projectId}`));
       console.log(chalk.dim(`  Team size: ${developers.length} developer(s)\n`));
       
