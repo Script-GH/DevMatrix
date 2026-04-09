@@ -115,7 +115,27 @@ const program = new Command();
 program
   .name('dmx')
   .description('DevMatrix (DMX) — AI-Powered Environment Diagnostician')
-  .version('1.0.0');
+  .version('1.0.0')
+  .addHelpText('after', `
+Major Commands:
+  scan                     Run a local scan and open the interactive dashboard
+  fix                      Automatically fix issues using the AI agent
+  advice | advise          Generate architectural review and technical tips
+  status                   Compare local environment with cloud/team state
+
+Project Management:
+  init <id>                Connect the current folder to a DMX project
+  update                   Sync dependencies with official project versions
+  update <dev>             Sync dependencies from a specific team member
+  logs push                Upload current version snapshot to the timeline
+  remove                   Stop tracking project on this machine
+
+Discovery & Setup:
+  list devs                List all registered team members
+  project info             Fetch project metadata and member status
+  auth                     Save your Groq API key safely
+  link <token>             Connect this CLI to your web profile
+`);
 
 // ─── scan ─────────────────────────────────────────────────────────────────────
 

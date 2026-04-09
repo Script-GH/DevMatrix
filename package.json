@@ -2,6 +2,10 @@
   "name": "devpulse-monorepo",
   "version": "1.0.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Script-GH/DevMatrix"
+  },
   "engines": {
     "node": ">=20.0.0",
     "vscode": "^1.85.0"
